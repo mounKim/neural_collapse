@@ -14,7 +14,8 @@ class BASELINE(CLManagerBase):
         super().__init__(train_datalist, test_datalist, device, **kwargs)
 
     def update_memory(self, sample):
-        self.reservoir_memory(sample)
+        #self.reservoir_memory(sample)
+        self.balanced_replace_memory(sample)
 
     def memory_future_step(self):
         try:

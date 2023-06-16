@@ -300,7 +300,8 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         return orth_vec
 
     def update_memory(self, sample):
-        self.reservoir_memory(sample)
+        #self.reservoir_memory(sample)
+        self.balanced_replace_memory(sample)
 
     def add_new_class(self, class_name, sample):
         self.cls_dict[class_name] = len(self.exposed_classes)

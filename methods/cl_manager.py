@@ -160,6 +160,17 @@ class CLManagerBase:
         for i in range(self.future_steps):
             self.load_batch()
 
+    def balanced_replace_memory(self, sample):
+        if len(self.memory.images) >= self.memory_size:
+            label_frequency = copy.deepcopy(self.memory.cls_count)
+            label_frequency[self.memory.cls_dict[sample['klass']]] += 1
+            cls_to_replace = np.random.choice(
+                np.flatnonzero(np.array(label_frequency) == np.array(label_frequency).max()))
+            idx_to_replace = np.random.choice(self.memory.cls_idx[cls_to_replace])
+            self.memory.replace_sample(sample, idx_to_replace)
+        else:
+            self.memory.replace_sample(sample)
+
     def memory_future_step(self):
         try:
             sample = next(self.data_stream)

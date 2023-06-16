@@ -36,6 +36,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.distill_beta = kwargs["distill_beta"]
         self.distill_strategy = kwargs["distill_strategy"]
         self.distill_threshold = kwargs["distill_threshold"]
+        self.use_residual = kwargs["use_residual"]
 
         self.stds_list = []
         self.softmax = nn.Softmax(dim=0).to(self.device)
@@ -416,47 +417,51 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
+                if self.use_residual:
+
+                    if self.loss_criterion == "DR":
+                        _, features = self.simple_test(x, y, return_feature=True)
+
+                    elif self.loss_criterion == "CE":
+                        logit, features = self.model(x, get_feature=True)
+
+                    features = self.pre_logits(features)
+
+                    # |z-z(i)|**2
+                    w_i_lists = [-torch.norm(feature - feature_list, p=2, dim=1, keepdim=True) for feature in features.detach()]
+
+                    # top_k w_i index select
+                    w_i_indexs = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[1].long() for w_i_list in w_i_lists]
+
+                    # top_k w_i 
+                    if self.select_criterion == "softmax":
+                        w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.knn_sigma) for w_i_list in w_i_lists]
+                    elif self.select_criterion == "linear": # just weight sum
+                        w_i_lists = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / torch.sum(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0]).item() for w_i_list in w_i_lists]
+
+                    # select top_k residuals
+                    residual_lists = [residual_list[w_i_index] for w_i_index in w_i_indexs]
+                    residual_terms = [rs_list.T @ w_i_list  for rs_list, w_i_list in zip(residual_lists, w_i_lists)]
+
+                    unique_y = torch.unique(y).tolist()
+                    for u_y in unique_y:
+                        indices = (y == u_y).nonzero(as_tuple=True)[0]
+                        if u_y not in feature_dict.keys():
+                            feature_dict[u_y] = [torch.index_select(features, 0, indices)]
+                        else:
+                            feature_dict[u_y].append(torch.index_select(features, 0, indices))
+
+
                 if self.loss_criterion == "DR":
-                    _, features = self.simple_test(x, y, return_feature=True)
-
-                elif self.loss_criterion == "CE":
-                    logit, features = self.model(x, get_feature=True)
-
-                features = self.pre_logits(features)
-
-                # |z-z(i)|**2
-                w_i_lists = [-torch.norm(feature - feature_list, p=2, dim=1, keepdim=True) for feature in features.detach()]
-
-                # top_k w_i index select
-                w_i_indexs = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[1].long() for w_i_list in w_i_lists]
-
-                # top_k w_i 
-                if self.select_criterion == "softmax":
-                    w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.knn_sigma) for w_i_list in w_i_lists]
-                elif self.select_criterion == "linear": # just weight sum
-                    w_i_lists = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / torch.sum(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0]).item() for w_i_list in w_i_lists]
-
-                # select top_k residuals
-                residual_lists = [residual_list[w_i_index] for w_i_index in w_i_indexs]
-                residual_terms = [rs_list.T @ w_i_list  for rs_list, w_i_list in zip(residual_lists, w_i_lists)]
-
-                unique_y = torch.unique(y).tolist()
-                for u_y in unique_y:
-                    indices = (y == u_y).nonzero(as_tuple=True)[0]
-                    if u_y not in feature_dict.keys():
-                        feature_dict[u_y] = [torch.index_select(features, 0, indices)]
-                    else:
-                        feature_dict[u_y].append(torch.index_select(features, 0, indices))
-
-
-                if self.loss_criterion == "DR":
-                    # Add residual terms to ETF head
-                    features += torch.stack(residual_terms).to(self.device)
+                    if self.use_residual:
+                        # Add residual terms to ETF head
+                        features += torch.stack(residual_terms).to(self.device)
                     target = self.etf_vec[:, y].t()
                     loss = self.criterion(features, target)
 
                 elif self.loss_criterion == "CE":
-                    logit = self.softmax(logit / self.softmax_temperature) + torch.stack(residual_terms).to(self.device)
+                    if self.use_residual:
+                        logit = self.softmax(logit / self.softmax_temperature) + torch.stack(residual_terms).to(self.device)
                     loss = criterion(logit, y)
 
                 if self.use_feature_distillation:

@@ -30,6 +30,7 @@ def base_parser():
     parser.add_argument("--loss_criterion", type=str, default="DR", help="")
     parser.add_argument("--distill_coeff", type=float, default=0.999, help="")
     parser.add_argument("--use_feature_distillation", action="store_true", help="")
+    parser.add_argument("--use_residual", action="store_true", help="")
     parser.add_argument("--current_feature_num", type=int, default=20, help="")
     parser.add_argument("--distill_beta", type=float, default=0.5, help="")
     parser.add_argument("--distill_strategy", type=str, default="naive")

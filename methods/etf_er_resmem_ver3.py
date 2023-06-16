@@ -417,15 +417,15 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
+                if self.loss_criterion == "DR":
+                    _, features = self.simple_test(x, y, return_feature=True)
+
+                elif self.loss_criterion == "CE":
+                    logit, features = self.model(x, get_feature=True)
+
+                features = self.pre_logits(features)
+
                 if self.use_residual:
-
-                    if self.loss_criterion == "DR":
-                        _, features = self.simple_test(x, y, return_feature=True)
-
-                    elif self.loss_criterion == "CE":
-                        logit, features = self.model(x, get_feature=True)
-
-                    features = self.pre_logits(features)
 
                     # |z-z(i)|**2
                     w_i_lists = [-torch.norm(feature - feature_list, p=2, dim=1, keepdim=True) for feature in features.detach()]

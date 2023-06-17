@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="etf_er_resmem_ver3_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_distill_coeff_0.99_distill_beta_0.5_top_k_3_softmax_temp_1.0_loss_dr_classwise_difference_threshold_0.5"
+NOTE="etf_er_resmem_ver3_cifar10_check"
 #"etf_er_resmem_ver3_non_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_top_k_3_softmax_temp_1.0_loss_ce"
 #"etf_er_resmem_ver3_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_distill_coeff_0.99_distill_beta_0.1_top_k_3_softmax_temp_1.0_loss_ce_classwise_difference_ver2_threshold_0.5"
 #"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k5_residual_num20"
@@ -18,7 +18,7 @@ EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
 UNFREEZE_RATE=0.25
-SEEDS="1 2 3"
+SEEDS="1"
 KNN_TOP_K="3"
 #STORE_PICKLE="--store_pickle"
 STORE_PICKLE=""
@@ -27,10 +27,10 @@ LOSS_CRITERION="DR"
 SOFTMAX_TEMPERATURE=1.0
 KNN_SIGMA=0.7
 RESIDUAL_NUM=20
-CURRENT_FEATURE_NUM=20
+CURRENT_FEATURE_NUM=50
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 ONLINE_ITER=1
-SIGMA=10
+SIGMA=0
 REPEAT=1
 INIT_CLS=100
 USE_AMP="--use_amp"
@@ -40,8 +40,8 @@ DISTILL_COEFF=0.99
 DISTILL_BETA=0.5
 DISTILL_THRESHOLD=0.5
 DISTILL_STRATEGY="classwise_difference" # naive, classwise, classwise_difference 
-USE_FEATURE_DISTILLATION="--use_feature_distillation"
-#USE_FEATURE_DISTILLATION=""
+#USE_FEATURE_DISTILLATION="--use_feature_distillation"
+USE_FEATURE_DISTILLATION=""
 USE_RESIDUAL="--use_residual"
 #USE_RESIDUAL=""
 
@@ -80,7 +80,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=6 nohup python main_new.py --mode $MODE \
+    CUDA_VISIBLE_DEVICES=0 nohup python main_new.py --mode $MODE \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 --residual_num $RESIDUAL_NUM \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS \

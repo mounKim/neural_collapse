@@ -275,12 +275,12 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         
     def etf_initialize(self):
         logger.info("ETF head : evaluating {} out of {} classes.".format(self.eval_classes, self.num_classes))
-
         orth_vec = self.generate_random_orthogonal_matrix(self.in_channels, self.num_classes)
         i_nc_nc = torch.eye(self.num_classes)
         one_nc_nc: torch.Tensor = torch.mul(torch.ones(self.num_classes, self.num_classes), (1 / self.num_classes))
         self.etf_vec = torch.mul(torch.matmul(orth_vec, i_nc_nc - one_nc_nc),
                             math.sqrt(self.num_classes / (self.num_classes - 1))).to(self.device)
+        
 
     def get_angle(self, a, b):
         inner_product = (a * b).sum(dim=0)
@@ -396,8 +396,8 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
     def evaluation(self, test_loader, criterion):
         total_correct, total_num_data, total_loss = 0.0, 0.0, 0.0
-        correct_l = torch.zeros(self.n_classes)
-        num_data_l = torch.zeros(self.n_classes)
+        correct_l = torch.zeros(self.n_classes).to(self.device)
+        num_data_l = torch.zeros(self.n_classes).to(self.device)
         total_acc = 0.0
         label = []
         feature_dict = {}
@@ -472,6 +472,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 with torch.no_grad():
                     if self.loss_criterion == "DR":
                         cls_score = features @ self.etf_vec
+                        pred = torch.argmax(cls_score, dim=-1)
                         _, correct_count = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
                         total_correct += correct_count
 
@@ -482,9 +483,13 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     total_loss += loss.item()
                     total_num_data += y.size(0)
 
+                    xlabel_cnt, correct_xlabel_cnt = self._interpret_pred(y, pred)
+                    correct_l += correct_xlabel_cnt.detach()
+                    num_data_l += xlabel_cnt.detach()
+
         avg_acc = total_correct / total_num_data
         avg_loss = total_loss / len(test_loader)
-        #cls_acc = (correct_l / (num_data_l + 1e-5)).numpy().tolist()
-        ret = {"avg_loss": avg_loss, "avg_acc": avg_acc}
+        cls_acc = (correct_l / (num_data_l + 1e-5)).cpu().numpy().tolist()
+        ret = {"avg_loss": avg_loss, "avg_acc": avg_acc, "cls_acc": cls_acc}
 
         return ret

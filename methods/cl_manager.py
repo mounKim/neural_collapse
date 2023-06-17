@@ -398,12 +398,20 @@ class CLManagerBase:
             f"ETA {datetime.timedelta(seconds=int((time.time() - self.start_time) * (self.total_samples-sample_num) / sample_num))}"
         )
 
-    def report_test(self, sample_num, avg_loss, avg_acc):
+    def report_test(self, sample_num, avg_loss, avg_acc, cls_acc):
+        print("cls_acc")
+        print(cls_acc)
         writer.add_scalar(f"test/loss", avg_loss, sample_num)
         writer.add_scalar(f"test/acc", avg_acc, sample_num)
         logger.info(
             f"Test | Sample # {sample_num} | test_loss {avg_loss:.4f} | test_acc {avg_acc:.4f} | TFLOPs {self.total_flops/1000:.2f}"
         )
+        for idx, acc in enumerate(cls_acc):
+            if acc == 0.0:
+                break
+            logger.info(
+                f"Class_Acc | Sample # {sample_num} | cls{idx} {acc:.4f}"
+            )
 
     def update_schedule(self, reset=False):
         if reset:
@@ -431,7 +439,7 @@ class CLManagerBase:
             num_workers=n_worker,
         )
         eval_dict = self.evaluation(test_loader, self.criterion)
-        self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"])
+        self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"], eval_dict["cls_acc"])
 
         if sample_num >= self.f_next_time:
             self.get_forgetting(sample_num, test_list, cls_dict, batch_size, n_worker)
@@ -594,8 +602,8 @@ class CLManagerBase:
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
 
     def _interpret_pred(self, y, pred):
-        ret_num_data = torch.zeros(self.n_classes)
-        ret_corrects = torch.zeros(self.n_classes)
+        ret_num_data = torch.zeros(self.n_classes).to(self.device)
+        ret_corrects = torch.zeros(self.n_classes).to(self.device)
 
         xlabel_cls, xlabel_cnt = y.unique(return_counts=True)
         for cls_idx, cnt in zip(xlabel_cls, xlabel_cnt):

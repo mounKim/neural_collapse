@@ -54,7 +54,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
         self.compute_accuracy = Accuracy(topk=self.topk)
         self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False).to(self.device)
-        self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes)
+        self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes).to(self.device)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
         self.etf_initialize()

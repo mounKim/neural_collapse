@@ -54,6 +54,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
         self.compute_accuracy = Accuracy(topk=self.topk)
         self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False).to(self.device)
+        self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
         self.etf_initialize()
@@ -145,11 +146,10 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     loss = self.criterion(feature, target)
                     residual = (target - feature).detach()
                 elif self.loss_criterion == "CE":
+                    logit = feature @ self.etf_vec
                     loss = self.criterion(logit, y)
-                    residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
-                elif self.loss_criterion == "DR_ANGLE":
-                    loss = self.criterion(logit, y)
-                    cos_theta = (target * feature) / torch.norm(target * feature, p=2, dim=1, keepdim=True)
+                    residual = (target - feature).detach()
+                    #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
 
                 if self.use_feature_distillation:
                     past_feature = torch.stack([self.pre_logits(self.cls_feature_dict[y_i.item()]) for y_i in y], dim=0)
@@ -225,16 +225,21 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                         self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
 
         # accuracy calculation
+        with torch.no_grad():
+            cls_score = feature @ self.etf_vec
+            acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+            acc = acc.item()
+        '''
         if self.loss_criterion == "DR":
             with torch.no_grad():
                 cls_score = feature @ self.etf_vec
                 acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
-                #acc, _ = self.compute_accuracy(cls_score[:, self.etf_index_list], y)
                 acc = acc.item()
+                
         elif self.loss_criterion == "CE":
             _, preds = logit.topk(self.topk, 1, True, True)
             correct = torch.sum(preds == y.unsqueeze(1)).item()
-
+        '''
         return logit, loss, feature, correct
 
     def pre_logits(self, x):
@@ -280,6 +285,8 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         one_nc_nc: torch.Tensor = torch.mul(torch.ones(self.num_classes, self.num_classes), (1 / self.num_classes))
         self.etf_vec = torch.mul(torch.matmul(orth_vec, i_nc_nc - one_nc_nc),
                             math.sqrt(self.num_classes / (self.num_classes - 1))).to(self.device)
+
+            
         
 
     def get_angle(self, a, b):
@@ -418,12 +425,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
-                if self.loss_criterion == "DR":
-                    _, features = self.simple_test(x, y, return_feature=True)
-
-                elif self.loss_criterion == "CE":
-                    logit, features = self.model(x, get_feature=True)
-
+                _, features = self.model(x, get_feature=True)
                 features = self.pre_logits(features)
 
                 if self.use_residual:
@@ -452,17 +454,15 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                         else:
                             feature_dict[u_y].append(torch.index_select(features, 0, indices))
 
-
+                if self.use_residual:
+                    features += torch.stack(residual_terms).to(self.device)
+                    
                 if self.loss_criterion == "DR":
-                    if self.use_residual:
-                        # Add residual terms to ETF head
-                        features += torch.stack(residual_terms).to(self.device)
                     target = self.etf_vec[:, y].t()
                     loss = self.criterion(features, target)
 
                 elif self.loss_criterion == "CE":
-                    if self.use_residual:
-                        logit = self.softmax(logit / self.softmax_temperature) + torch.stack(residual_terms).to(self.device)
+                    logit = features @ self.etf_vec
                     loss = criterion(logit, y)
 
                 if self.use_feature_distillation:
@@ -470,6 +470,11 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
                 # accuracy calculation
                 with torch.no_grad():
+                    cls_score = features @ self.etf_vec
+                    pred = torch.argmax(cls_score, dim=-1)
+                    _, correct_count = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                    total_correct += correct_count
+                    '''
                     if self.loss_criterion == "DR":
                         cls_score = features @ self.etf_vec
                         pred = torch.argmax(cls_score, dim=-1)
@@ -479,7 +484,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     elif self.loss_criterion == "CE":
                         _, preds = logit.topk(self.topk, 1, True, True)
                         total_correct += torch.sum(preds == y.unsqueeze(1)).item()
-
+                    '''
                     total_loss += loss.item()
                     total_num_data += y.size(0)
 

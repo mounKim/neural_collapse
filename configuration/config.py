@@ -37,6 +37,7 @@ def base_parser():
     parser.add_argument("--distill_threshold", type=float, default=0.5)
     parser.add_argument("--residual_strategy", type=str, default="")
     parser.add_argument("--residual_num_threshold", type=int, default=10, help="")
+    parser.add_argument("--use_residual_warmup", action="store_true", help="")
     
     # for baseline
     parser.add_argument("--recent_ratio", type=float, default=0.5, help="sampling ratio between recent and past")

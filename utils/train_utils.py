@@ -224,6 +224,41 @@ class DR_loss(nn.Module):
 
         return loss * self.loss_weight
 
+class DR_Reverse_loss(nn.Module):
+    def __init__(self,
+                 reduction='mean',
+                 loss_weight=1.0,
+                 reg_lambda=0.
+                 ):
+        super().__init__()
+
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.reg_lambda = reg_lambda
+
+    def forward(
+            self,
+            feat,
+            targets,
+            num_classes,
+            h_norm2=None,
+            m_norm2=None,
+            avg_factor=None,
+    ):
+        assert avg_factor is None
+        dot = torch.sum(feat * targets, dim=1)
+        if h_norm2 is None:
+            h_norm2 = torch.ones_like(dot)
+        if m_norm2 is None:
+            m_norm2 = torch.ones_like(dot)
+        
+        if self.reduction == "mean":
+            loss = 0.5 * torch.mean((dot ** 2) / h_norm2)
+        elif self.reduction == "none":
+            loss = 0.5 * (((dot) ** 2) / h_norm2)
+
+        return loss * self.loss_weight * (1 / num_classes)
+
 def accuracy_numpy(pred, target, topk=(1, ), thrs=0.):
     if isinstance(thrs, Number):
         thrs = (thrs, )

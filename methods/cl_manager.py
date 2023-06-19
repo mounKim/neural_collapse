@@ -398,8 +398,8 @@ class CLManagerBase:
             return logit, loss
 
     def report_training(self, sample_num, train_loss, train_acc):
-        writer.add_scalar(f"train/loss", train_loss, sample_num)
-        writer.add_scalar(f"train/acc", train_acc, sample_num)
+        #writer.add_scalar(f"train/loss", train_loss, sample_num)
+        #writer.add_scalar(f"train/acc", train_acc, sample_num)
         logger.info(
             f"Train | Sample # {sample_num} | train_loss {train_loss:.4f} | train_acc {train_acc:.4f} | TFLOPs {self.total_flops/1000:.2f} | "
             f"running_time {datetime.timedelta(seconds=int(time.time() - self.start_time))} | "
@@ -409,8 +409,8 @@ class CLManagerBase:
     def report_test(self, sample_num, avg_loss, avg_acc, cls_acc):
         print("cls_acc")
         print(cls_acc)
-        writer.add_scalar(f"test/loss", avg_loss, sample_num)
-        writer.add_scalar(f"test/acc", avg_acc, sample_num)
+        #writer.add_scalar(f"test/loss", avg_loss, sample_num)
+        #writer.add_scalar(f"test/acc", avg_acc, sample_num)
         logger.info(
             f"Test | Sample # {sample_num} | test_loss {avg_loss:.4f} | test_acc {avg_acc:.4f} | TFLOPs {self.total_flops/1000:.2f}"
         )

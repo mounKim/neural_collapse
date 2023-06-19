@@ -86,6 +86,7 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
         data = dict()
         images = []
         labels = []
+        indexs = []
         if len(r) > 0:
             for sample in r:
                 if use_kornia:
@@ -98,6 +99,7 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
                 else:
                     images.append(load_data(sample, data_dir, transform))
                 labels.append(sample["label"])
+                indexs.append(sample["sample_num"])
             if transform_on_worker:
                 if use_kornia:
                     images = kornia_randaug(torch.stack(images).to(device))
@@ -109,6 +111,7 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
                 images = torch.stack(images)
             data['image'] = images
             data['label'] = torch.LongTensor(labels)
+            data['sample_num'] = torch.LongTensor(indexs)
             data_queue.put(data)
         else:
             data_queue.put(None)

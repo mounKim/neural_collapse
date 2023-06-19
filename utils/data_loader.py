@@ -64,31 +64,39 @@ class MultiProcessLoader():
     def add_new_class(self, cls_dict):
         self.cls_dict = cls_dict
 
-    def load_batch(self, batch, cls_dict):
+    def load_batch(self, batch, cls_dict, batch_idx):
+
         self.cls_dict = cls_dict
-        for sample in batch:
+        for idx, sample in enumerate(batch):
             sample["label"] = self.cls_dict[sample["klass"]]
+            sample["sample_num"] = batch_idx[idx]
             
         for i in range(self.n_workers):
             self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
-
+            
     @torch.no_grad()
     def get_batch(self):
         data = dict()
         images = []
         labels = []
+        sample_nums = []
+        
         for i in range(self.n_workers):
             loaded_samples = self.result_queues[i].get(timeout=300.0)
             if loaded_samples is not None:
                 images.append(loaded_samples["image"])
                 labels.append(loaded_samples["label"])
+                sample_nums.append(loaded_samples["sample_num"])
+                
         if len(images) > 0:
             images = torch.cat(images)
             labels = torch.cat(labels)
+            sample_nums = torch.cat(sample_nums)
             if self.transform_on_gpu and not self.transform_on_worker:
                 images = self.transform(images.to(self.device))
             data['image'] = images
             data['label'] = labels
+            data['sample_nums'] = sample_nums
             return data
         else:
             return None
@@ -1751,6 +1759,50 @@ def get_statistics(dataset: str):
         in_channels[dataset],
     )
 
+def generate_masking(x, device, patch_size=2):
+    '''
+    past => well distinguised
+    past and novel => not well distinguised
+    novel => terrible
+    
+    this generate new class using exposed_classes[-1] and exposed_classes[-2]
+    
+    return) index1, mask
+    '''
+    c, w, h = x.shape
+    x_patched = (c, w//patch_size, h//patch_size)
+    rand = torch.randn_like(x_patched).to(device)
+    index = [torch.randperm(c*w*h).reshape_as(x).to(device) for _ in range(c)]
+    mask = rand > 0
+    return index, mask
+    
+def generate_new_data(x, y, index, mask, patch_size, device, alpha=1.0):
+    
+    channel = x.shape[0]
+    patch_len = x.shape[1] // patch_size
+    
+    new_x = x.clone().to(device)
+    new_y = y.clone().to(device)
+    
+    # index대로 patch 순서 섞기
+    for c in range(channel):
+        for i in index[c]:
+            x_c = i//patch_len
+            y_c = i%patch_len
+            new_x[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size] = x[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size]
+            new_y[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size] = y[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size]
+
+    # mask 부분만 swap
+    for c in range(channel):
+        for i in range(patch_len):
+            for j in range(patch_len):
+                if mask[c][i][j] == 0:
+                    continue
+                temp = new_x[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
+                new_x[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size] = new_y[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
+                new_y[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size] = temp
+    
+    return new_x, new_y
 
 # from https://github.com/drimpossible/GDumb/blob/74a5e814afd89b19476cd0ea4287d09a7df3c7a8/src/utils.py#L102:5
 def cutmix_data(x, y, alpha=1.0, cutmix_prob=0.5, z=None):

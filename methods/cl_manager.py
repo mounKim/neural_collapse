@@ -94,6 +94,8 @@ class CLManagerBase:
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
+        self.temp_future_batch_idx = []
+
         self.num_updates = 0
         self.future_num_updates = 0
         self.sample_num = 0
@@ -123,6 +125,7 @@ class CLManagerBase:
         self.total_samples = num_samples[self.dataset]
 
         self.waiting_batch = []
+        self.waiting_batch_idx = []
         self.initialize_future()
 
         self.total_flops = 0.0
@@ -144,6 +147,7 @@ class CLManagerBase:
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
+        self.temp_future_batch_idx = []
         self.num_updates = 0
         self.future_num_updates = 0
         self.train_count = 0
@@ -160,16 +164,16 @@ class CLManagerBase:
         for i in range(self.future_steps):
             self.load_batch()
 
-    def balanced_replace_memory(self, sample):
+    def balanced_replace_memory(self, sample, sample_num=None):
         if len(self.memory.images) >= self.memory_size:
             label_frequency = copy.deepcopy(self.memory.cls_count)
             label_frequency[self.memory.cls_dict[sample['klass']]] += 1
             cls_to_replace = np.random.choice(
                 np.flatnonzero(np.array(label_frequency) == np.array(label_frequency).max()))
             idx_to_replace = np.random.choice(self.memory.cls_idx[cls_to_replace])
-            self.memory.replace_sample(sample, idx_to_replace)
+            self.memory.replace_sample(sample, idx_to_replace, sample_num = sample_num)
         else:
-            self.memory.replace_sample(sample)
+            self.memory.replace_sample(sample, sample_num = sample_num)
 
     def memory_future_step(self):
         try:
@@ -180,6 +184,7 @@ class CLManagerBase:
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
         self.temp_future_batch.append(sample)
+        self.temp_future_batch_idx.append(self.future_sample_num)
         self.future_num_updates += self.online_iter
 
         if len(self.temp_future_batch) >= self.temp_batch_size:
@@ -214,12 +219,15 @@ class CLManagerBase:
             if stream_end:
                 break
         if not stream_end:
-            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict)
+            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0])
             del self.waiting_batch[0]
+            del self.waiting_batch_idx[0]
 
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
-            self.waiting_batch.append(self.temp_future_batch + self.memory.retrieval(self.memory_batch_size))
+            memory_batch, memory_batch_idx = self.memory.retrieval(self.memory_batch_size)
+            self.waiting_batch.append(self.temp_future_batch + memory_batch)
+            self.waiting_batch_idx.append(self.temp_future_batch_idx + memory_batch_idx)
 
     def online_step(self, sample, sample_num, n_worker):
         self.sample_num = sample_num
@@ -406,12 +414,11 @@ class CLManagerBase:
         logger.info(
             f"Test | Sample # {sample_num} | test_loss {avg_loss:.4f} | test_acc {avg_acc:.4f} | TFLOPs {self.total_flops/1000:.2f}"
         )
-        for idx, acc in enumerate(cls_acc):
-            if acc == 0.0:
-                break
+        for idx in range(self.num_learned_class):
+            acc = cls_acc[idx]
             logger.info(
                 f"Class_Acc | Sample # {sample_num} | cls{idx} {acc:.4f}"
-            )
+            )            
 
     def update_schedule(self, reset=False):
         if reset:
@@ -806,6 +813,7 @@ class MemoryBase:
         self.memory_size = memory_size
         self.images = []
         self.labels = []
+        self.sample_nums = []
         self.update_buffer = ()
         self.cls_dict = dict()
         self.cls_list = []
@@ -821,13 +829,15 @@ class MemoryBase:
     def __len__(self):
         return len(self.images)
 
-    def replace_sample(self, sample, idx=None):
+    def replace_sample(self, sample, idx=None, sample_num=None):
         self.cls_count[self.cls_dict[sample['klass']]] += 1
         if idx is None:
             assert len(self.images) < self.memory_size
             self.cls_idx[self.cls_dict[sample['klass']]].append(len(self.images))
             self.images.append(sample)
             self.labels.append(self.cls_dict[sample['klass']])
+            if sample_num is not None:
+                self.sample_nums.append(sample_num)
         else:
             assert idx < self.memory_size
             self.cls_count[self.labels[idx]] -= 1
@@ -835,7 +845,9 @@ class MemoryBase:
             self.images[idx] = sample
             self.labels[idx] = self.cls_dict[sample['klass']]
             self.cls_idx[self.cls_dict[sample['klass']]].append(idx)
-
+            if sample_num is not None:
+                self.sample_nums[idx] = sample_num
+                
     def add_new_class(self, class_name):
         self.cls_dict[class_name] = len(self.cls_list)
         self.cls_list.append(class_name)
@@ -855,7 +867,9 @@ class MemoryBase:
     def retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
+        memory_batch_idx = []
         indices = np.random.choice(range(len(self.images)), size=sample_size, replace=False)
         for i in indices:
             memory_batch.append(self.images[i])
-        return memory_batch
+            memory_batch_idx.append(self.sample_nums[i])
+        return memory_batch, memory_batch_idx

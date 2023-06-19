@@ -33,12 +33,14 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.feature_std_mean_list = []
         self.current_feature_num = kwargs["current_feature_num"]
         self.residual_num = kwargs["residual_num"]
+        self.residual_num_threshold = kwargs["residual_num_threshold"]
         self.distill_beta = kwargs["distill_beta"]
         self.distill_strategy = kwargs["distill_strategy"]
         self.distill_threshold = kwargs["distill_threshold"]
         self.use_residual = kwargs["use_residual"]
-
+        self.residual_strategy = kwargs["residual_strategy"]
         self.stds_list = []
+        self.residual_dict_index={}
         self.softmax = nn.Softmax(dim=0).to(self.device)
         self.use_feature_distillation = kwargs["use_feature_distillation"]
         if self.loss_criterion == "DR":
@@ -61,6 +63,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.residual_dict = {}
         self.feature_dict = {}
         self.cls_feature_dict = {}
+        self.current_cls_feature_dict_index = {}
         self.note = kwargs["note"]
         os.makedirs(f"{self.note}", exist_ok=True)
 
@@ -70,6 +73,29 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         b_norm = b.pow(2).sum(dim=1).pow(0.5)
         cos = inner_product / (a_norm * b_norm)
         return cos
+
+    def get_within_class_covariance(self, mean_vec_list, feature_dict):
+        cov_tensor = torch.zeros(len(list(mean_vec_list.keys()))).to(self.device)
+        # feature dimension 512로 fixed
+        for idx, klass in enumerate(list(feature_dict.keys())):
+            W = torch.zeros(self.model.fc.in_features, self.model.fc.in_features).to(self.device)
+            total_num = 0
+            for i in range(len(feature_dict[klass])):
+                W += torch.outer((feature_dict[klass][i] - mean_vec_list[klass]), (feature_dict[klass][i] - mean_vec_list[klass]))
+            total_num += len(feature_dict[klass])
+            W /= total_num
+            cov_tensor[idx] = torch.trace(W)
+        return cov_tensor
+
+    def get_within_whole_class_covariance(self, whole_mean_vec, feature_list):
+        # feature dimension 512로 fixed
+        W = torch.zeros(self.model.fc.in_features, self.model.fc.in_features).to(self.device)
+        total_num = 0
+        for feature in feature_list:
+            W += torch.outer((feature - whole_mean_vec), (feature - whole_mean_vec))
+        total_num += len(feature_list)
+        W /= total_num
+        return torch.trace(W)
 
     def sample_inference(self, samples):
         with torch.no_grad():
@@ -102,7 +128,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         if sample["klass"] not in self.memory.cls_list:
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
-        self.update_memory(sample)
+        self.update_memory(sample, self.future_sample_num)
         self.temp_future_batch.append(sample)
         self.future_num_updates += self.online_iter
 
@@ -113,7 +139,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.future_sample_num += 1
         return 0
 
-    def model_forward(self, x, y):
+    def model_forward(self, x, y, sample_nums):
         #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
         do_cutmix = False
 
@@ -129,18 +155,19 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
             with torch.cuda.amp.autocast(self.use_amp):
                 logit, feature = self.model(x, get_feature=True)
                 feature = self.pre_logits(feature)
-
-                # calcualte current feature
-                for idx, y_i in enumerate(y):
-                    if y_i not in self.current_cls_feature_dict.keys():
-                        self.current_cls_feature_dict[y_i.item()] = [feature[idx].detach()]
-                    else:
-                        self.current_cls_feature_dict[y_i.item()].append(feature[idx].detach())
-
-                # check over storing
-                for y_i in torch.unique(y):
-                    if len(self.current_cls_feature_dict[y_i.item()]) >= self.current_feature_num:
-                        self.current_cls_feature_dict[y_i.item()] = self.current_cls_feature_dict[y_i][-self.current_cls_feature_num:]
+                
+                if self.use_feature_distillation:    
+                    # calcualte current feature
+                    for idx, y_i in enumerate(y):
+                        if y_i not in self.current_cls_feature_dict.keys():
+                            self.current_cls_feature_dict[y_i.item()] = [feature[idx].detach()]
+                        else:
+                            self.current_cls_feature_dict[y_i.item()].append(feature[idx].detach())
+                                
+                    # check over storing
+                    for y_i in torch.unique(y):
+                        if len(self.current_cls_feature_dict[y_i.item()]) >= self.current_feature_num:
+                            self.current_cls_feature_dict[y_i.item()] = self.current_cls_feature_dict[y_i][-self.current_cls_feature_num:]
 
                 if self.loss_criterion == "DR":
                     loss = self.criterion(feature, target)
@@ -211,35 +238,35 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                         print(beta_masking)
                         print("loss", loss.mean(), "l2_loss", (self.distill_beta * beta_masking * l2_loss).mean())
                         loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
+
                 # residual dict update
                 for idx, t in enumerate(y):
                     if t.item() not in self.residual_dict.keys():
                         self.residual_dict[t.item()] = [residual[idx]]
                         self.feature_dict[t.item()] = [feature.detach()[idx]]
-                    else:
+                        self.residual_dict_index[t.item()] = [sample_nums[idx].item()]
+                    else: 
+                        if sample_nums[idx].item() in self.residual_dict_index[t.item()]:
+                            target_index = self.residual_dict_index[t.item()].index(sample_nums[idx].item())
+                            del self.residual_dict[t.item()][target_index]
+                            del self.feature_dict[t.item()][target_index]
+                            del self.residual_dict_index[t.item()][target_index]
+                            
                         self.residual_dict[t.item()].append(residual[idx])
                         self.feature_dict[t.item()].append(feature.detach()[idx])
-                
+                        self.residual_dict_index[t.item()].append(sample_nums[idx].item())
+                        
                     if len(self.residual_dict[t.item()]) > self.residual_num:
                         self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
                         self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
+                        self.residual_dict_index[t.item()] = self.residual_dict_index[t.item()][1:]
 
         # accuracy calculation
         with torch.no_grad():
             cls_score = feature @ self.etf_vec
             acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
             acc = acc.item()
-        '''
-        if self.loss_criterion == "DR":
-            with torch.no_grad():
-                cls_score = feature @ self.etf_vec
-                acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
-                acc = acc.item()
-                
-        elif self.loss_criterion == "CE":
-            _, preds = logit.topk(self.topk, 1, True, True)
-            correct = torch.sum(preds == y.unsqueeze(1)).item()
-        '''
+
         return logit, loss, feature, correct
 
     def pre_logits(self, x):
@@ -254,13 +281,13 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
+            sample_nums = data["sample_nums"].to(self.device)
 
             self.before_model_update()
-
             self.optimizer.zero_grad()
 
             # logit can not be used anymore
-            _, loss, feature, correct_batch = self.model_forward(x,y)
+            _, loss, feature, correct_batch = self.model_forward(x,y, sample_nums)
 
             if self.use_amp:
                 self.scaler.scale(loss).backward()
@@ -287,8 +314,6 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                             math.sqrt(self.num_classes / (self.num_classes - 1))).to(self.device)
 
             
-        
-
     def get_angle(self, a, b):
         inner_product = (a * b).sum(dim=0)
         a_norm = a.pow(2).sum(dim=0).pow(0.5)
@@ -306,9 +331,9 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 torch.max(torch.abs(torch.matmul(orth_vec.T, orth_vec) - torch.eye(num_classes))))
         return orth_vec
 
-    def update_memory(self, sample):
+    def update_memory(self, sample, sample_num=None):
         #self.reservoir_memory(sample)
-        self.balanced_replace_memory(sample)
+        self.balanced_replace_memory(sample, sample_num)
 
     def add_new_class(self, class_name, sample):
         self.cls_dict[class_name] = len(self.exposed_classes)
@@ -402,6 +427,8 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
             return torch.eq(res, gt_label).to(dtype=torch.float32)
 
     def evaluation(self, test_loader, criterion):
+        print("Memory State")
+        print(self.memory.cls_count)
         total_correct, total_num_data, total_loss = 0.0, 0.0, 0.0
         correct_l = torch.zeros(self.n_classes).to(self.device)
         num_data_l = torch.zeros(self.n_classes).to(self.device)
@@ -415,9 +442,33 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         for key in self.residual_dict.keys():
             residual_list.extend(self.residual_dict[key])
             feature_list.extend(self.feature_dict[key])
+            print("residual", key, len(self.residual_dict[key]))
         residual_list = torch.stack(residual_list)
         feature_list = torch.stack(feature_list)
 
+        # residual dict 내의 feature들이 어느정도 잘 모여있는 상태여야 residual term good
+        nc1_feature_dict = {}
+        mu_G = 0
+        num_feature = 0
+        mean_vec_list = {}
+        mean_vec_tensor_list = []
+        for cls in list(self.feature_dict.keys()):
+            nc1_feature_dict[cls] = torch.stack(self.feature_dict[cls]).detach()
+            nc1_feature_dict[cls] /= torch.norm(torch.stack(self.feature_dict[cls], dim=0), p=2, dim=1, keepdim=True)
+            mean_vec_list[cls] = torch.mean(torch.stack(self.feature_dict[cls]), dim=0)
+            mean_vec_tensor_list.append(mean_vec_list[cls])
+            mu_G += torch.sum(nc1_feature_dict[cls], dim=0)
+            num_feature += len(self.feature_dict[cls])
+        
+        mu_G /= num_feature
+        mean_vec_tensor_list = torch.stack(mean_vec_tensor_list)       
+        cov_tensor = self.get_within_class_covariance(mean_vec_list, nc1_feature_dict)
+        whole_cov_value = self.get_within_whole_class_covariance(mu_G, feature_list)
+        print(cov_tensor)
+        print(whole_cov_value)
+        prob = torch.ones_like(cov_tensor).to(self.device) - cov_tensor / whole_cov_value
+        print("prob")
+        print(prob)
         with torch.no_grad():
             for i, data in enumerate(test_loader):
                 x = data["image"]
@@ -446,6 +497,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     residual_lists = [residual_list[w_i_index] for w_i_index in w_i_indexs]
                     residual_terms = [rs_list.T @ w_i_list  for rs_list, w_i_list in zip(residual_lists, w_i_lists)]
 
+                    '''
                     unique_y = torch.unique(y).tolist()
                     for u_y in unique_y:
                         indices = (y == u_y).nonzero(as_tuple=True)[0]
@@ -453,10 +505,33 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                             feature_dict[u_y] = [torch.index_select(features, 0, indices)]
                         else:
                             feature_dict[u_y].append(torch.index_select(features, 0, indices))
+                    '''
 
                 if self.use_residual:
-                    features += torch.stack(residual_terms).to(self.device)
-                    
+                    total_mask = torch.Tensor([len(self.residual_dict_index[key]) for key in list(self.residual_dict_index.keys())]).to(self.device) >= self.residual_num_threshold
+                    if self.residual_strategy == "prob":
+                        prob_mask = prob > torch.rand(1).to(self.device)
+                        prob_mask *= total_mask
+
+                        mask = torch.zeros(len(y)).to(self.device)
+                        for idx, y_i in enumerate(y):
+                            if y_i >= len(prob_mask):
+                                mask[idx] = 0
+                                continue
+                            mask[idx] = prob_mask[y_i.item()]
+                        index = (mask==1).nonzero(as_tuple=True)[0]
+                        features[index] += torch.stack(residual_terms).to(self.device)[index]
+                        
+                    elif self.residual_strategy == "none":
+                        mask = torch.zeros(len(y)).to(self.device)
+                        for idx, y_i in enumerate(y):
+                            if y_i >= len(total_mask):
+                                mask[idx] = 0
+                                continue
+                            mask[idx] = total_mask[y_i.item()]
+                        index = (mask==1).nonzero(as_tuple=True)[0]                        
+                        features[index] += torch.stack(residual_terms).to(self.device)
+                        
                 if self.loss_criterion == "DR":
                     target = self.etf_vec[:, y].t()
                     loss = self.criterion(features, target)

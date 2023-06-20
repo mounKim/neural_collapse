@@ -41,6 +41,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.residual_strategy = kwargs["residual_strategy"]
         self.use_residual_unique = kwargs["use_residual_unique"]
         self.use_residual_warmup = kwargs["use_residual_warmup"]
+        self.use_modified_knn = kwargs["use_modified_knn"]
         self.stds_list = []
         self.residual_dict_index={}
         self.softmax = nn.Softmax(dim=0).to(self.device)
@@ -455,12 +456,15 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         if self.use_residual:
             residual_list = []
             feature_list = []
+            key_list = []
             for key in self.residual_dict.keys():
                 residual_list.extend(self.residual_dict[key])
                 feature_list.extend(self.feature_dict[key])
+                key_list.extend([int(key) for _ in range(len(self.feature_dict[key]))])
                 print("residual", key, len(self.residual_dict[key]))
             residual_list = torch.stack(residual_list)
             feature_list = torch.stack(feature_list)
+            key_list = torch.Tensor(key_list).to(self.device)
 
             # residual dict 내의 feature들이 어느정도 잘 모여있는 상태여야 residual term good
             nc1_feature_dict = {}
@@ -499,19 +503,31 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 if self.use_residual:
 
                     # |z-z(i)|**2
+                    # print("-torch.norm(feature - feature_list, p=2, dim=1, keepdim=True)", torch.norm(features[0] - feature_list, p=2, dim=1, keepdim=True).shape)
                     w_i_lists = [-torch.norm(feature - feature_list, p=2, dim=1, keepdim=True) for feature in features.detach()]
 
                     # top_k w_i index select
                     w_i_indexs = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[1].long() for w_i_list in w_i_lists]
-
+                    
+                    # modified_knn
+                    if self.use_modified_knn:
+                        w_i_new_indexs = []
+                        for w_i in w_i_indexs:
+                            unique = torch.unique(key_list[w_i], return_counts=True)
+                            index = (key_list[w_i] == unique[0][torch.argmax(unique[1]).item()].item()).nonzero(as_tuple=True)[0]
+                            w_i_new_indexs.append(w_i[index])
+                        w_i_indexs = w_i_new_indexs
+                        
                     # top_k w_i 
                     if self.select_criterion == "softmax":
-                        w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.knn_sigma) for w_i_list in w_i_lists]
+                        #w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.knn_sigma) for w_i_list in w_i_lists]
+                        w_i_lists = [self.softmax(w_i_list.squeeze()[w_i_index] / self.knn_sigma) for w_i_index, w_i_list in zip(w_i_indexs, w_i_lists)]
                     elif self.select_criterion == "linear": # just weight sum
                         w_i_lists = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / torch.sum(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0]).item() for w_i_list in w_i_lists]
 
                     # select top_k residuals
                     residual_lists = [residual_list[w_i_index] for w_i_index in w_i_indexs]
+                    
                     residual_terms = [rs_list.T @ w_i_list  for rs_list, w_i_list in zip(residual_lists, w_i_lists)]
 
                     '''

@@ -525,7 +525,11 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     '''
 
                 if self.use_residual:
-                    total_mask = torch.Tensor([len(self.residual_dict_index[key]) for key in list(self.residual_dict_index.keys())]).to(self.device) >= self.residual_num_threshold
+                    if self.use_residual_unique:
+                        total_mask = torch.Tensor([len(self.residual_dict_index[key]) for key in list(self.residual_dict_index.keys())]).to(self.device) >= self.residual_num_threshold
+                    else:
+                        total_mask = torch.Tensor([len(self.residual_dict[key]) for key in list(self.residual_dict.keys())]).to(self.device) >= self.residual_num_threshold
+                        
                     if self.residual_strategy == "prob":
                         prob_mask = prob > torch.rand(1).to(self.device)
                         

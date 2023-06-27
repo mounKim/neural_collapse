@@ -40,6 +40,10 @@ def base_parser():
     parser.add_argument("--use_residual_warmup", action="store_true", help="")
     parser.add_argument("--use_residual_unique", action="store_true", help="")
     parser.add_argument("--use_modified_knn", action="store_true", help="")
+    parser.add_argument("--ood_strategy", type=str, default="cutmix")
+    parser.add_argument("--ood_num_samples", type=int, default=4)
+    parser.add_argument("--use_patch_permutation", action="store_true")
+    parser.add_argument("--use_synthetic_regularization", action="store_true")
     
     
     # for baseline

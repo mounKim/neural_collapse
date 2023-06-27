@@ -37,7 +37,7 @@ class Accuracy(nn.Module):
         super().__init__()
         self.topk = topk
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, real_entered_num_class = None, real_num_class = None):
         """Forward function to calculate accuracy.
 
         Args:
@@ -47,7 +47,7 @@ class Accuracy(nn.Module):
         Returns:
             list[torch.Tensor]: The accuracies under different topk criterions.
         """
-        return accuracy(pred, target, self.topk)
+        return accuracy(pred, target, self.topk, real_entered_num_class = real_entered_num_class, real_num_class = real_num_class)
 
 class DataAugmentation(nn.Module):
 
@@ -227,7 +227,7 @@ class DR_loss(nn.Module):
 class DR_Reverse_loss(nn.Module):
     def __init__(self,
                  reduction='mean',
-                 loss_weight=1.0,
+                 loss_weight=0.01,
                  reg_lambda=0.
                  ):
         super().__init__()
@@ -246,7 +246,8 @@ class DR_Reverse_loss(nn.Module):
             avg_factor=None,
     ):
         assert avg_factor is None
-        dot = torch.sum(feat * targets, dim=1)
+        #dot = torch.sum(feat * targets, dim=1)
+        dot = torch.sum(feat @ targets.T, dim=1)
         if h_norm2 is None:
             h_norm2 = torch.ones_like(dot)
         if m_norm2 is None:
@@ -296,7 +297,7 @@ def accuracy_numpy(pred, target, topk=(1, ), thrs=0.):
     return res
 
 
-def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
+def accuracy_torch(pred, target, topk=(1, ), thrs=0., real_entered_num_class=None, real_num_class=None):
     if isinstance(thrs, Number):
         thrs = (thrs, )
         res_single = True
@@ -305,19 +306,27 @@ def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
     else:
         raise TypeError(
             f'thrs should be a number or tuple, but got {type(thrs)}.')
-
+    if real_entered_num_class is not None:
+        inf_index = []
+        for i in range(4):
+            #inf_index += list(range(i * real_num_class, i * real_num_class + real_entered_num_class))
+            inf_index += list(range(i * real_num_class + real_entered_num_class, min((i+1) * real_num_class, pred.shape[1])))
+        pred[:, inf_index] = float('-inf')
+        
     res = []
     maxk = max(topk)
     num = pred.size(0)
     pred = pred.float()
     pred_score, pred_label = pred.topk(maxk, dim=1)
     pred_label = pred_label.t()
+
     '''
+    print("target")
+    print(target.view(1, -1).expand_as(pred_label))
     print("pred_label")
     print(pred_label)
-    print("target")
-    print(target)
     '''
+    
     correct = pred_label.eq(target.view(1, -1).expand_as(pred_label))
     for k in topk:
         res_thr = []
@@ -334,7 +343,7 @@ def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
     return res, correct_count
 
 
-def accuracy(pred, target, topk=1, thrs=0.):
+def accuracy(pred, target, topk=1, thrs=0., real_entered_num_class = None, real_num_class = None):
     """Calculate accuracy according to the prediction and target.
 
     Args:
@@ -373,7 +382,7 @@ def accuracy(pred, target, topk=1, thrs=0.):
     pred = to_tensor(pred)
     target = to_tensor(target)
 
-    res, correct_count = accuracy_torch(pred, target, topk, thrs)
+    res, correct_count = accuracy_torch(pred, target, topk, thrs, real_entered_num_class, real_num_class)
     return (res[0], correct_count) if return_single else (res, correct_count)
 
 '''

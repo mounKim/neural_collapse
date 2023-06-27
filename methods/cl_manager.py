@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from sklearn.manifold import TSNE
 import seaborn as sns
 from matplotlib import pyplot as plt
-
+from utils.augment import my_segmentation_transforms
 from flops_counter.ptflops import get_model_complexity_info
 from utils.data_loader import ImageDataset, cutmix_data, MultiProcessLoader, get_statistics
 from utils.augment import get_transform
@@ -46,7 +46,7 @@ class CLManagerBase:
         if self.sched_name == "default":
             self.sched_name = 'const'
         self.lr = kwargs["lr"]
-
+        self.real_num_classes = kwargs["num_class"]
         assert kwargs["temp_batchsize"] <= kwargs["batchsize"]
         self.batch_size = kwargs["batchsize"]
         self.temp_batch_size = kwargs["temp_batchsize"]
@@ -64,11 +64,11 @@ class CLManagerBase:
         self.transform_on_gpu = kwargs["transform_on_gpu"]
         self.use_kornia = kwargs["use_kornia"]
         self.transform_on_worker = kwargs["transform_on_worker"]
-
+        self.use_synthetic_regularization = kwargs["use_synthetic_regularization"]
         self.eval_period = kwargs["eval_period"]
         self.topk = kwargs["topk"]
         self.f_period = kwargs["f_period"]
-
+        self.ood_strategy = kwargs["ood_strategy"]
         self.use_amp = kwargs["use_amp"]
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
@@ -90,7 +90,7 @@ class CLManagerBase:
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory_dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = MemoryBase(self.memory_size)
+        self.memory = MemoryBase(self.memory_size, self.device, self.ood_strategy)
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -200,7 +200,7 @@ class CLManagerBase:
         pass
 
     def get_whole_batch(self):
-        self.memory_dataloader.load_batch(self.memory.whole_retrieval(), self.memory.cls_dict)
+        self.memory_dataloader.load_batch(self.memory.whole_retrieval(), self.memory.cls_dict, self.memory.sample_nums)
         batch = self.memory_dataloader.get_batch()
         return batch
 
@@ -287,11 +287,20 @@ class CLManagerBase:
             batchsize = 512
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-
+            new_x, new_y = my_segmentation_transforms(x, y, self.real_num_classes)
+            new_x = new_x.to(self.device)
+            new_y = new_y.to(self.device)
+            
             features = []
             for i in range(len(self.memory) // batchsize + 1):
                 _, feature = self.model(x[i * batchsize:min((i + 1) * batchsize, len(x))], get_feature=True)
                 features.append(feature)
+            
+            if self.ood_strategy != "none" and self.use_synthetic_regularization:
+                for i in range(len(new_x) // batchsize + 1):
+                    _, feature = self.model(new_x[i * batchsize:min((i + 1) * batchsize, len(new_x))], get_feature=True)
+                    features.append(feature)
+                y = torch.cat([y, new_y])
             #self.model(torch.cat(x[i * batchsize:min((i + 1) * batchsize, len(x))]).to(self.device)) for i in range(512 // batchsize))], dim=0) 
             #_, features = self.model(x, get_feature=True)
             features = torch.cat(features,dim=0)
@@ -809,7 +818,7 @@ class CLManagerBase:
 
 
 class MemoryBase:
-    def __init__(self, memory_size):
+    def __init__(self, memory_size, device, ood_strategy=None):
         self.memory_size = memory_size
         self.images = []
         self.labels = []
@@ -825,6 +834,8 @@ class MemoryBase:
         self.current_labels = []
         self.current_cls_count = [0 for _ in self.cls_list]
         self.current_cls_idx = [[] for _ in self.cls_list]
+        self.ood_strategy = ood_strategy
+        self.device = device
 
     def __len__(self):
         return len(self.images)
@@ -863,6 +874,36 @@ class MemoryBase:
         for i in indices:
             memory_batch.append(self.images[i])
         return memory_batch
+
+    def generate_ood_class(self, num_samples=1):
+        if self.ood_strategy == "cutmix":
+            if len(self.cls_idx) <= 1:
+                return None
+            pair = np.random.choice(len(self.cls_idx), 2, replace=False)
+            pair.sort()
+            pair = tuple(pair)
+            num_samples = min([len(self.cls_idx[pair[0]]), len(self.cls_idx[pair[1]]), num_samples])
+            index_1 = np.random.choice(self.cls_idx[pair[0]], num_samples)
+            index_2 = np.random.choice(self.cls_idx[pair[1]], num_samples)
+
+            x1, y1 = np.array(self.images)[index_1], np.array(self.labels)[index_1]
+            x2, y2 = np.array(self.images)[index_2], np.array(self.labels)[index_2]    
+            return (pair, x1, x2)
+        
+        elif self.ood_strategy == "rotate":
+            index = np.random.choice(len(self.images), min(num_samples, len(self.images)))
+            x = np.array(self.images)[index]
+            y = np.array(self.labels)[index]
+            '''
+            cls = np.random.choice(len(self.cls_idx), 1)
+            num_samples = min([len(self.cls_idx[cls[0]]), num_samples])
+            index = np.random.choice(self.cls_idx[cls[0]], num_samples)
+            x = np.array(self.images)[index]
+            '''
+            return (x, y)
+        
+        #elif self.ood_strategy == "rotate":
+            
 
     def retrieval(self, size):
         sample_size = min(size, len(self.images))

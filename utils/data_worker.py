@@ -55,6 +55,8 @@ else:
                 self.manager_dead = os.getppid() != self.manager_pid
             return not self.manager_dead
 
+def load_batch(samples, data_dir, transform=None):
+    return torch.stack([load_data(sample, data_dir, transform) for sample in samples])
 
 def load_data(sample, data_dir, transform=None):
     img_name = sample["file_name"]

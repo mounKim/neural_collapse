@@ -13,9 +13,9 @@ class BASELINE(CLManagerBase):
             kwargs["temp_batchsize"] = 0
         super().__init__(train_datalist, test_datalist, device, **kwargs)
 
-    def update_memory(self, sample):
+    def update_memory(self, sample, sample_num=None):
         #self.reservoir_memory(sample)
-        self.balanced_replace_memory(sample)
+        self.balanced_replace_memory(sample, sample_num)
 
     def memory_future_step(self):
         try:
@@ -25,7 +25,7 @@ class BASELINE(CLManagerBase):
         if sample["klass"] not in self.memory.cls_list:
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
-        self.update_memory(sample)
+        self.update_memory(sample, self.future_sample_num)
         self.temp_future_batch.append(sample)
         self.future_num_updates += self.online_iter
 
@@ -70,7 +70,9 @@ class BASELINE(CLManagerBase):
 
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
-            self.waiting_batch.append(self.memory.retrieval(self.memory_batch_size))
+            memory_batch, memory_batch_idx = self.memory.retrieval(self.memory_batch_size)
+            self.waiting_batch.append(memory_batch)
+            self.waiting_batch_idx.append(memory_batch_idx)
 
     def reservoir_memory(self, sample):
         self.seen += 1

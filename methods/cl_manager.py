@@ -190,10 +190,11 @@ class CLManagerBase:
         if len(self.temp_future_batch) >= self.temp_batch_size:
             self.generate_waiting_batch(int(self.future_num_updates))
             for stored_sample in self.temp_future_batch:
-                self.update_memory(stored_sample)
+                self.update_memory(sample, self.future_sample_num)
+                self.future_sample_num += 1
+                #self.update_memory(stored_sample)
             self.temp_future_batch = []
             self.future_num_updates -= int(self.future_num_updates)
-        self.future_sample_num += 1
         return 0
 
     def update_memory(self, sample):
@@ -330,12 +331,11 @@ class CLManagerBase:
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-
+            sample_nums = data["sample_nums"].to(self.device)
             self.before_model_update()
 
             self.optimizer.zero_grad()
-
-            logit, loss = self.model_forward(x,y)
+            logit, loss = self.model_forward(x,y, sample_nums)
 
             _, preds = logit.topk(self.topk, 1, True, True)
 
@@ -380,9 +380,9 @@ class CLManagerBase:
         return logit, loss
     '''
 
-    def model_forward(self, x, y, get_feature=False):
-        #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
-        do_cutmix = False
+    def model_forward(self, x, y, sample_nums, get_feature=False):
+        do_cutmix = self.cutmix and np.random.rand(1) < 0.5
+        #do_cutmix = False
         if do_cutmix:
             x, labels_a, labels_b, lam = cutmix_data(x=x, y=y, alpha=1.0)
             with torch.cuda.amp.autocast(self.use_amp):

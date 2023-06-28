@@ -360,6 +360,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 ood_data = self.ood_inference(self.ood_num_samples)
                 if ood_data is not None:
                     new_x, new_y = ood_data
+                    self.optimizer.zero_grad()
                     loss, feature, correct_batch = self.model_forward(new_x, new_y, sample_nums, augmented_input=True)
                     if self.use_amp:
                         self.scaler.scale(loss).backward()

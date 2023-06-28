@@ -206,6 +206,8 @@ class DR_loss(nn.Module):
             self,
             feat,
             target,
+            pure_num=None,
+            augmented_num=None,
             h_norm2=None,
             m_norm2=None,
             avg_factor=None,
@@ -218,7 +220,12 @@ class DR_loss(nn.Module):
             m_norm2 = torch.ones_like(dot)
         
         if self.reduction == "mean":
-            loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
+            if augmented_num is None:
+                loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
+            else:
+                loss = ((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2
+                loss = 0.5 * ((torch.mean(loss[:pure_num]) + torch.mean(loss[pure_num:])) / 2)
+                
         elif self.reduction == "none":
             loss = 0.5 * (((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
 

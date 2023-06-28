@@ -441,6 +441,7 @@ class CLManagerBase:
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
         test_df = pd.DataFrame(test_list)
         exp_test_df = test_df[test_df['klass'].isin(self.exposed_classes)]
+        print("exp_test_df", len(exp_test_df))
         test_dataset = ImageDataset(
             exp_test_df,
             dataset=self.dataset,
@@ -891,7 +892,7 @@ class MemoryBase:
             return (pair, x1, x2)
         
         elif self.ood_strategy == "rotate":
-            index = np.random.choice(len(self.images), min(num_samples, len(self.images)))
+            index = np.random.choice(range(len(self.images)), min(num_samples, len(self.images)), replace=False)
             x = np.array(self.images)[index]
             y = np.array(self.labels)[index]
             '''

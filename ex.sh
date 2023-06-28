@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="etf_er_resmem_ver6_sigma10_cifar10_ood"
+NOTE="etf_er_resmem_ver6_sigma10_cifar10_non_distill_non_residual_ood_rotate"
 #"etf_er_resmem_ver3_non_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_top_k_3_softmax_temp_1.0_loss_ce"
 #"etf_er_resmem_ver3_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_distill_coeff_0.99_distill_beta_0.1_top_k_3_softmax_temp_1.0_loss_ce_classwise_difference_ver2_threshold_0.5"
 #"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k5_residual_num20"
@@ -18,7 +18,7 @@ EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
 UNFREEZE_RATE=0.25
-SEEDS="1"
+SEEDS="1 2 3"
 KNN_TOP_K="3"
 SELECT_CRITERION="softmax"
 LOSS_CRITERION="DR"
@@ -42,7 +42,7 @@ DISTILL_STRATEGY="classwise_difference" # naive, classwise, classwise_difference
 RESIDUAL_STRATEGY="none" # prob, none
 OOD_STRATEGY="rotate" # cutmix, rotate, none
 OOD_NUM_SAMPLES=16
-TRANSFORMS=['randaug', 'cutmix']
+#TRANSFORMS=['randaug', 'cutmix']
 
 ### DISTILLATION ###
 #USE_FEATURE_DISTILLATION="--use_feature_distillation"
@@ -56,17 +56,17 @@ STORE_PICKLE="--store_pickle"
 #USE_RESIDUAL="--use_residual"
 USE_RESIDUAL=""
 
-RESIDUAL_WARM_UP="--use_residual_warmup"
-#RESIDUAL_WARM_UP=""
+#RESIDUAL_WARM_UP="--use_residual_warmup"
+RESIDUAL_WARM_UP=""
 
 #RESIDUAL_UNIQUE="--use_residual_unique"
 RESIDUAL_UNIQUE=""
 
-MODIFIED_KNN="--use_modified_knn"
-#MODIFIED_KNN=""
+#MODIFIED_KNN="--use_modified_knn"
+MODIFIED_KNN=""
 
-PATCH_PERMUATION="--use_patch_permutation"
-#PATCH_PERMUATION=""
+#PATCH_PERMUATION="--use_patch_permutation"
+PATCH_PERMUATION=""
 
 REGULARIZATION="--use_synthetic_regularization"
 #REGULARIZATION=""
@@ -107,7 +107,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=0 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE --transforms $TRANSFORMS \
+    CUDA_VISIBLE_DEVICES=2 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE --ood_strategy $OOD_STRATEGY \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 --residual_num $RESIDUAL_NUM $RESIDUAL_WARM_UP $MODIFIED_KNN --ood_num_samples $OOD_NUM_SAMPLES \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS --residual_num_threshold $RESIDUAL_NUM_THRESHOLD \

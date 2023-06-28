@@ -28,7 +28,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         # num class = 100, eval_class = 60 
         self.num_classes = kwargs["num_class"]
         
-        if self.ood_strategy == "rotate":
+        if self.ood_strategy == "rotate" and self.use_synthetic_regularization:
             self.num_classes = self.num_classes * 4
         
         self.eval_classes = 0 #kwargs["num_eval_class"]
@@ -265,39 +265,40 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                         loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
 
                 # residual dict update
-                if self.use_residual_unique:    
-                    for idx, t in enumerate(y):
-                        if t.item() not in self.residual_dict.keys():
-                            self.residual_dict[t.item()] = [residual[idx]]
-                            self.feature_dict[t.item()] = [feature.detach()[idx]]
-                            self.residual_dict_index[t.item()] = [sample_nums[idx].item()]
-                        else: 
-                            if sample_nums[idx].item() in self.residual_dict_index[t.item()]:
-                                target_index = self.residual_dict_index[t.item()].index(sample_nums[idx].item())
-                                del self.residual_dict[t.item()][target_index]
-                                del self.feature_dict[t.item()][target_index]
-                                del self.residual_dict_index[t.item()][target_index]
+                if self.use_residual:
+                    if self.use_residual_unique:    
+                        for idx, t in enumerate(y):
+                            if t.item() not in self.residual_dict.keys():
+                                self.residual_dict[t.item()] = [residual[idx]]
+                                self.feature_dict[t.item()] = [feature.detach()[idx]]
+                                self.residual_dict_index[t.item()] = [sample_nums[idx].item()]
+                            else: 
+                                if sample_nums[idx].item() in self.residual_dict_index[t.item()]:
+                                    target_index = self.residual_dict_index[t.item()].index(sample_nums[idx].item())
+                                    del self.residual_dict[t.item()][target_index]
+                                    del self.feature_dict[t.item()][target_index]
+                                    del self.residual_dict_index[t.item()][target_index]
+                                    
+                                self.residual_dict[t.item()].append(residual[idx])
+                                self.feature_dict[t.item()].append(feature.detach()[idx])
+                                self.residual_dict_index[t.item()].append(sample_nums[idx].item())
                                 
-                            self.residual_dict[t.item()].append(residual[idx])
-                            self.feature_dict[t.item()].append(feature.detach()[idx])
-                            self.residual_dict_index[t.item()].append(sample_nums[idx].item())
-                            
-                        if len(self.residual_dict[t.item()]) > self.residual_num:
-                            self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
-                            self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
-                            self.residual_dict_index[t.item()] = self.residual_dict_index[t.item()][1:]
-                else:
-                    for idx, t in enumerate(y):
-                        if t.item() not in self.residual_dict.keys():
-                            self.residual_dict[t.item()] = [residual[idx]]
-                            self.feature_dict[t.item()] = [feature.detach()[idx]]
-                        else:  
-                            self.residual_dict[t.item()].append(residual[idx])
-                            self.feature_dict[t.item()].append(feature.detach()[idx])
-                            
-                        if len(self.residual_dict[t.item()]) > self.residual_num:
-                            self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
-                            self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
+                            if len(self.residual_dict[t.item()]) > self.residual_num:
+                                self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
+                                self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
+                                self.residual_dict_index[t.item()] = self.residual_dict_index[t.item()][1:]
+                    else:
+                        for idx, t in enumerate(y):
+                            if t.item() not in self.residual_dict.keys():
+                                self.residual_dict[t.item()] = [residual[idx]]
+                                self.feature_dict[t.item()] = [feature.detach()[idx]]
+                            else:  
+                                self.residual_dict[t.item()].append(residual[idx])
+                                self.feature_dict[t.item()].append(feature.detach()[idx])
+                                
+                            if len(self.residual_dict[t.item()]) > self.residual_num:
+                                self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
+                                self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
                 
                 '''
                 if self.use_synthetic_regularization:

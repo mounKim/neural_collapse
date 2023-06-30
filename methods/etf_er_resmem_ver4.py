@@ -18,7 +18,7 @@ from utils.augment import my_segmentation_transforms
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
 
-class ETF_ER_RESMEM_VER3(CLManagerBase):
+class ETF_ER_RESMEM_VER4(CLManagerBase):
     def __init__(self,  train_datalist, test_datalist, device, **kwargs):
         if kwargs["temp_batchsize"] is None:
             kwargs["temp_batchsize"] = 0
@@ -174,7 +174,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.future_sample_num += 1
         return 0
 
-    def model_forward(self, x, y, sample_nums, augmented_input=False):
+    def model_forward(self, x, y, pure_num=None, augmented_num=None, sample_nums=None, augmented_input=False):
         if self.cutmix:
             do_cutmix = np.random.rand(1) < 0.5
         else:
@@ -195,7 +195,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 feature = self.pre_logits(feature)
 
                 if self.loss_criterion == "DR":
-                    loss = self.criterion(feature, target)
+                    loss = self.criterion(feature, target, pure_num=pure_num, augmented_num=augmented_num)
                     residual = (target - feature).detach()
                     
                 elif self.loss_criterion == "CE":
@@ -335,13 +335,26 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
+            pure_num = len(x)
+            augmented_num = None
             sample_nums = data["sample_nums"].to(self.device)
+            if self.use_synthetic_regularization:
+                ood_data = self.ood_inference(self.ood_num_samples)
+                if ood_data is not None:
+                    new_x, new_y = ood_data
+                    new_x = new_x.to(self.device)
+                    new_y = new_y.to(self.device)
+                    augmented_num = len(new_x)
+                    x = torch.cat([x, new_x])
+                    y = torch.cat([y, new_y])
+                    
             self.before_model_update()
             self.optimizer.zero_grad()
 
             # logit can not be used anymore
-            loss, feature, correct_batch = self.model_forward(x,y, sample_nums)
-            
+            print("pure_num", pure_num, "augmented_num", augmented_num)
+            loss, feature, correct_batch = self.model_forward(x, y, pure_num, augmented_num, augmented_input=True)
+
             if self.use_amp:
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -355,23 +368,6 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
             total_loss += loss.item()
             correct += correct_batch
             num_data += y.size(0)
-            
-            if self.use_synthetic_regularization:
-                ood_data = self.ood_inference(self.ood_num_samples)
-                if ood_data is not None:
-                    new_x, new_y = ood_data
-                    self.optimizer.zero_grad()
-                    loss, feature, correct_batch = self.model_forward(new_x, new_y, sample_nums, augmented_input=True)
-                    if self.use_amp:
-                        self.scaler.scale(loss).backward()
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        loss.backward()
-                        self.optimizer.step()
-
-                #self.after_model_update()
-                #total_loss += loss.item()            
 
         return total_loss / iterations, correct / num_data
         

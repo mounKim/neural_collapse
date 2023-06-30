@@ -13,7 +13,6 @@ from methods.etf import ETF
 from methods.etf_er import ETF_ER
 from methods.etf_er_ce import ETF_ER_CE
 from methods.twf_new import TWF
-from methods.remind_new import REMIND
 from methods.baseline_new_joint import BASELINE_JOINT
 logger = logging.getLogger()
 
@@ -132,13 +131,6 @@ def select_method(args, train_datalist, test_datalist, device):
         )
     elif args.mode == "twf":        
         method = TWF(
-            train_datalist=train_datalist,
-            test_datalist=test_datalist,
-            device=device,
-            **kwargs,
-        )
-    elif args.mode == "remind":        
-        method = REMIND(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,

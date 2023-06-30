@@ -1,9 +1,9 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="twf" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="0630_twf_dymclassifier" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="twf"
-K_COEFF="4"
+K_COEFF="3"
 TEMPERATURE="0.125"
 TRANSFORM_ON_GPU="--transform_on_gpu"
 #TRANSFORM_ON_GPU=""
@@ -14,8 +14,7 @@ EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
 UNFREEZE_RATE=0.25
-SEEDS="1 2 3"
-
+SEEDS="1"
 
 DATASET="cifar100" # cifar10, cifar100, tinyimagenet, imagenet
 ONLINE_ITER=3
@@ -65,7 +64,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=5 nohup python main_new.py --mode $MODE \
+    CUDA_VISIBLE_DEVICES=1 nohup python main_new.py --mode $MODE \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --n_tasks $N_TASKS --samples_per_task $SAMPLES_PER_TASK \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS \

@@ -31,13 +31,13 @@ class TWF(ER):
         mean, std, n_classes, inp_size, _ = get_statistics(dataset=self.dataset)
         self.n_classes = n_classes
         self.inp_size = inp_size
-        self.loss = F.cross_entropy
+        self.loss = nn.CrossEntropyLoss(reduction="mean").to(self.device)
         self.kwargs = kwargs
         self.lambda_fp_replay = kwargs['lambda_fp_replay']
         self.lambda_diverse_loss = kwargs['lambda_diverse_loss']
         self.min_resize_threshold = 16
         self.resize_maps = 0
-        
+        self.online_train_ct = 0
         self.batch_size = kwargs['batchsize']
 
         # Memory Switing
@@ -46,7 +46,8 @@ class TWF(ER):
         
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
+        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, \
+            self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.future_task_id = 0
         self.future_samples_cnt = 0
         self.memory = TwFMemory(self.memory_size)
@@ -72,7 +73,13 @@ class TWF(ER):
         
         for i in range(self.future_steps):
             self.load_batch()
-            
+    
+    def get_batch(self):
+        batch = self.dataloader.get_batch()
+        self.load_batch()
+        return batch
+    
+    
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
             self.waiting_batch.append(self.temp_future_batch)
@@ -95,8 +102,8 @@ class TWF(ER):
 
         if len(self.temp_future_batch) >= self.temp_batch_size:
             self.generate_waiting_batch(int(self.future_num_updates))
-            for idx, stored_sample in enumerate(self.temp_future_batch):
-                self.update_memory(stored_sample, stored_sample['task_id'], self.future_samples_cnt -(self.temp_batch_size) + idx)
+            # for idx, stored_sample in enumerate(self.temp_future_batch):
+            #     self.update_memory(stored_sample, stored_sample['task_id'], self.future_samples_cnt -(self.temp_batch_size) + idx)
             self.temp_future_batch = []
             self.future_num_updates -= int(self.future_num_updates)
         self.future_sample_num += 1
@@ -107,8 +114,9 @@ class TWF(ER):
         
         # Teacher model
         self.model = select_model(self.model_name, self.dataset, pre_trained=True).to(self.device)
-        # self.model.fc = nn.Linear(self.model.fc.in_features, self.n_classes).to(self.device)
+        self.model.fc = nn.Linear(self.model.fc.in_features, self.n_classes).to(self.device)
         self.pretrained_model = copy.deepcopy(self.model.eval()) 
+        self.pretrained_model = self.pretrained_model.to(self.device)
        
         for p in self.pretrained_model.parameters():
             p.requires_grad = False
@@ -117,6 +125,7 @@ class TWF(ER):
         self.pretrained_model.set_return_prerelu(True)
         
     def online_before_task(self, task_id):
+        self.task_id = task_id
         if task_id == 0:
             x = torch.zeros((self.temp_batch_size, 3, self.inp_size, self.inp_size))
         
@@ -132,7 +141,6 @@ class TWF(ER):
                     adapt_shape = (adapt_shape[0], 1, 1)  # linear is a cx1x1
                     pret_shape = (pret_shape[0], 1, 1)
                 
-                    
                 setattr(self.model, f"adapter_{i+1}", MultiTaskAFDAlternative(
                     adapt_shape, self.n_tasks, clear_grad=False,
                     teacher_forcing_or=False,
@@ -163,8 +171,8 @@ class TWF(ER):
             if int(self.num_updates) > 0:
                 images, train_loss, train_acc, logits, attention_maps, labels = self.online_train(iterations=int(self.num_updates))
                 self.report_training(sample_num, train_loss, train_acc)
-                for idx, stored_sample in enumerate(self.temp_batch):
-                    self.complete_memory(images[idx], self.temp_sample_nums[idx], logits[idx],[at_map[idx] for at_map in attention_maps], labels[idx])
+                # for idx, stored_sample in enumerate(self.temp_batch):
+                #     self.complete_memory(images[idx], self.temp_sample_nums[idx], logits[idx],[at_map[idx] for at_map in attention_maps], labels[idx])
                     
                 self.num_updates -= int(self.num_updates)
             self.temp_batch = []
@@ -228,11 +236,12 @@ class TWF(ER):
         
         self.model.train()
         total_loss, correct, num_data = 0.0, 0.0, 0.0
+        self.online_train_ct += 1
         for i in range(iterations):
             # print("iteration", i)
             data = self.get_batch()
-            x = data["image"].to(self.device)
-            y = data["label"].to(self.device)
+            x = data["image"]
+            y = data["label"]
             stream_task_ids = data['task_id']
             self.optimizer.zero_grad()
         
@@ -240,12 +249,17 @@ class TWF(ER):
                 memory_data, _ = self.memory.retrieval(self.temp_batch_size)
                 memory_images = [item['image'] for item in memory_data]
                 memory_labels = [item['label'] for item in memory_data]
+                memory_images = [memory_image.to(self.device) for memory_image in memory_images]
+                # memory_labels = [memory_label.to(self.device) for memory_label in memory_labels]
                 x = torch.stack(list(x) + memory_images)
-                y = torch.stack(list(y) + list(torch.tensor(memory_labels).to(self.device)))
+                # y = torch.stack(list(y) + list(torch.tensor(memory_labels).to(self.device)))
+                y = torch.stack(list(y) + memory_labels)
                 memory_task_ids = [item['task_id'] for item in memory_data]
-                all_task_ids = torch.stack(list(stream_task_ids) + list(torch.tensor(memory_task_ids))).to(self.device)
-        
-
+                # all_task_ids = torch.stack(list(stream_task_ids) + list(torch.tensor(memory_task_ids))).to(self.device)
+                all_task_ids = torch.tensor(list(stream_task_ids) + memory_task_ids).to(self.device)
+                
+            x = x.to(self.device)
+            y = y.to(self.device)
             logit, loss, all_features = self.model_forward(x, y, get_features=True)
             all_pret_logits, all_pret_features = self.pretrained_model(x, get_features=True)
 
@@ -258,7 +272,7 @@ class TWF(ER):
             stream_pret_logits = all_pret_logits[:self.temp_batch_size]
             stream_pret_partial_features = [feature[:self.temp_batch_size] for feature in all_pret_features]
             
-            all_stream_logit = torch.cat([stream_logit, stream_pret_logits], dim=1).data
+            # all_stream_logit = torch.cat([stream_logit, stream_pret_logits], dim=1).data
         
             # labels = y[:self.temp_batch_size]
             
@@ -272,63 +286,57 @@ class TWF(ER):
             # buf_data = self.memory.buffer
             # buf_sample_ids = [d['sample_id'] for d in buf_data]
             
-        
             if len(self.memory.objects) == 0:
                 stream_task_ids = stream_task_ids.to(self.device)
                 stream_y = y
                 loss_afd, stream_attention_maps = partial_distill_loss(self.model, 
                         stream_partial_features, stream_pret_partial_features, stream_y, stream_task_ids, self.device)
             else:
+                print("memory came, no worries", len(self.memory.objects))
                 buf_logit = logit[self.temp_batch_size:]
-                # buf_partial_features = [feature[:self.temp_batch_size] for feature in all_features]
-                
-                # buf_pret_logits = all_pret_logits[self.temp_batch_size:]
-                # buf_pret_partial_features = [feature[self.temp_batch_size:] for feature in all_pret_features]
+                # buf_logit = buf_logit.to(self.device)
                 memory_task_ids = [item['task_id'] for item in memory_data]
-                # print("memory_task_id", memory_task_ids)
                 memory_attentionmaps = [[attention_map.to(self.device) for attention_map in item['attention_maps']] for item in memory_data]
-                # print("memory_attentionmaps", memory_attentionmaps)
-                memory_logits = [item['logits'] for item in memory_data]
+                memory_logits = [item['logits'].to(self.device) for item in memory_data]
                 memory_classes = [item['cls'] for item in memory_data]
-                print("memory_classes", memory_classes)
                 memory_labels = [item['label'] for item in memory_data]
     
                 buffer_teacher_forcing = [task_ids != self.future_task_id for task_ids in memory_task_ids]
-                # print("buffer_teacher_forcing", buffer_teacher_forcing)
                 buffer_teacher_forcing = torch.tensor(buffer_teacher_forcing).to(self.device)
                 teacher_forcing = torch.cat(
                     (torch.zeros((self.temp_batch_size)).bool().to(self.device), buffer_teacher_forcing))
                 attention_maps = [
                     [torch.ones_like(map) for map in memory_attentionmaps[0]]]*self.temp_batch_size + memory_attentionmaps
-                # print("attentionmap", len(attention_maps[0]))
-                # print("attentionmap", len(attention_maps[1]))
                 
                 
-                # loss_afd, all_attention_maps = partial_distill_loss(self.model, all_features[-len(
-                # all_pret_features):], all_pret_features, y, all_task_ids, self.device,
                 loss_afd, all_attention_maps = partial_distill_loss(self.model, all_features, all_pret_features, y, all_task_ids, self.device,
                     teacher_forcing, attention_maps)
+                # loss_afd.to(self.device)
 
                 stream_attention_maps = [ap[:self.temp_batch_size] for ap in all_attention_maps]
                 
                 memory_logits = torch.stack(memory_logits)
-                memory_labels = torch.tensor(memory_labels).to(self.device)
+                memory_labels = torch.stack(memory_labels).to(self.device)
                 
                 loss_er = self.loss(memory_logits, memory_labels)
+                # loss_der = F.mse_loss(buf_logit, memory_logits)
                 
                 for i in range(len(memory_logits)):
-                    length = len(memory_logits[i])
-                    buf_logit = buf_logit[i][:length]
-                    memory_logit = memory_logits[i]
+                    length = memory_classes[i]
+                    # resize to make equal # of class conditions
+                    buf_logit_seg = buf_logit[i][:length]
+                    memory_logit_seg = memory_logits[i][:length]
                     
                     # substract mean
-                    buf_logit = buf_logit - torch.mean(buf_logit, dim=0)
-                    memory_logit = memory_logit - torch.mean(memory_logit, dim=0)
+                    # buf_logit_seg = (buf_logit_seg - torch.mean(buf_logit_seg, dim=0))
+                    # memory_logit_seg = (memory_logit_seg - torch.mean(memory_logit_seg, dim=0))
                     
-                    loss_der += F.mse_loss(buf_logit[i].to(self.device), memory_logits[i].to(self.device))
+                    # add per logit
+                    loss_der += F.mse_loss(buf_logit_seg, memory_logit_seg).cpu()
                 
                 
-            stream_y = torch.tensor(y[:self.temp_batch_size]).clone().detach().to(self.device)
+            # stream_y = torch.tensor(y[:self.temp_batch_size]).clone().detach()
+            stream_y = y[:self.temp_batch_size]
             
             loss = self.loss(stream_logit, stream_y)
             loss += self.kwargs['der_beta'] * loss_er
@@ -352,13 +360,23 @@ class TWF(ER):
             num_data += y.size(0)
 
         # return total_loss / iterations, correct / num_data, logit, stream_attention_maps
-        stream_logit = [logit.detach() for logit in stream_logit]
+        stream_logit = [logit.detach().cpu()  for logit in stream_logit]
+        stream_attention_maps = [attention_map.detach().cpu() for attention_map in stream_attention_maps]
+        
         for i in range(len(stream_logit)):
             stream_logit[i] = nn.functional.pad(stream_logit[i], (0, 100 - stream_logit[i].shape[0]), mode='constant', value=0)
-            
-        # to eight
-        print("stream_logit", stream_logit[0].shape, stream_logit[1].shape, stream_logit[2].shape, stream_logit[3].shape, stream_logit[4].shape, stream_logit[5].shape, stream_logit[6].shape, stream_logit[7].shape)
-        stream_attention_maps = [attention_map.detach() for attention_map in stream_attention_maps]
+        
+        x = x.detach().cpu()
+        y = y.detach().cpu()
+        
+        stream_attention_maps_iter = []
+        for idx in range(self.temp_batch_size):
+            stream_attention_maps_iter.append([at_map[idx] for at_map in stream_attention_maps])
+        
+        print(self.online_train_ct)
+        print((self.online_train_ct * self.temp_batch_size - self.temp_batch_size), self.online_train_ct * self.temp_batch_size)
+        self.update_complete_memory(self.train_datalist[(self.online_train_ct * self.temp_batch_size - self.temp_batch_size) : self.online_train_ct * self.temp_batch_size], \
+            self.task_id, x[:self.temp_batch_size], stream_logit, stream_attention_maps_iter, y[:self.temp_batch_size])
         
         return x[:self.temp_batch_size], total_loss / iterations, correct / num_data, stream_logit, stream_attention_maps, y[:self.temp_batch_size]
 
@@ -370,6 +388,10 @@ class TWF(ER):
     def complete_memory(self, image, sample_id, logits, attention_maps, labels):
         self.memory.replace_sample(image, sample_id, logits, attention_maps, labels)
 
+    # 저 위에 있는 2개를 한 번에 함
+    def update_complete_memory(self, sample, task_id, image, logits, attention_maps, labels):
+        self.memory.replace_through(sample, task_id, image, logits, attention_maps, labels)
+        
 # data --(select_sample)--> buffer[object] --(replace_sample)--> replay memory[object]
 # object keys: sample, label, sample_id, task_id, logits, attention_maps
 class TwFMemory():
@@ -418,7 +440,22 @@ class TwFMemory():
                     
                 del self.buffer[buffer_idx]
                 break
-  
+    
+    def replace_through(self, sample, task_id, image, logits, attention_maps, labels):
+        print(len(sample), len(image), len(logits), len(attention_maps), len(labels))
+        
+        
+        print(len(self.objects), self.memory_size)
+        for i in range(len(sample)):
+            self.seen += 1
+            if len(self.objects) >= self.memory_size:
+                idx = np.random.randint(self.seen)
+                if idx < len(self.objects):
+                    self.objects[idx] = self.create_data(sample[i], task_id, None, image[i], logits[i], attention_maps[i], labels[i])
+            else:
+                self.objects.append(self.create_data(sample[i], task_id, None, image[i], logits[i], attention_maps[i], labels[i]))
+        
+        
     def whole_retrieval(self):
         memory_batch = []
         indices = list(range(len(self.objects)))
@@ -434,7 +471,7 @@ class TwFMemory():
             memory_batch.append(self.objects[i])
         return memory_batch, indices
     
-    def create_data(self, sample, task_id, sample_id, image=None, logits=None, attention_maps=None):
+    def create_data(self, sample, task_id, sample_id, image=None, logits=None, attention_maps=None, labels=None):
         data = {}
         data['sample'] = sample
         data['label'] = self.cls_dict[sample['klass']]
@@ -445,6 +482,7 @@ class TwFMemory():
         data['logits'] = logits
         data['attention_maps'] = attention_maps
         data['cls'] = len(self.cls_list)
+        data['label'] = labels
         
         return data
 
@@ -481,6 +519,7 @@ class TwFMemory():
                 
                 obj_inputs = [self.objects[idx]['image'] for idx in obj_idxs]
                 obj_inputs = torch.stack(obj_inputs).to(device)
+                obj_labels = torch.stack(obj_labels).to(device)
                 obj_inputs = obj_inputs[obj_mask]
                 obj_labels = obj_labels[obj_mask]
                 obj_idxs = obj_idxs[obj_mask]

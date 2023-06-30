@@ -26,7 +26,7 @@ class DER(CLManagerBase):
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = DERMemory(self.memory_size)
+        self.memory = DERMemory(self.memory_size, self.device)
 
         self.logit_num_to_get = []
         self.logit_num_to_save = []
@@ -58,26 +58,60 @@ class DER(CLManagerBase):
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
         self.temp_future_batch.append(sample)
+        self.temp_future_batch_idx.append(self.future_sample_num)
         self.future_num_updates += self.online_iter
 
         if len(self.temp_future_batch) >= self.temp_batch_size:
             self.generate_waiting_batch(int(self.future_num_updates))
             temp_batch_logit_num = []
-            for stored_sample in self.temp_future_batch:
-                logit_num = self.update_memory(stored_sample)
+            for future_sample_num, stored_sample in zip(self.temp_future_batch_idx, self.temp_future_batch):
+                logit_num = self.update_memory(sample, future_sample_num)
                 temp_batch_logit_num.append(logit_num)
             self.logit_num_to_save.append(temp_batch_logit_num)
             self.temp_future_batch = []
             self.future_num_updates -= int(self.future_num_updates)
         self.future_sample_num += 1
         return 0
+    
+    '''
+    def memory_future_step(self):
+        try:
+            sample = next(self.data_stream)
+        except:
+            return 1
+        if sample["klass"] not in self.memory.cls_list:
+            self.memory.add_new_class(sample["klass"])
+            self.dataloader.add_new_class(self.memory.cls_dict)
+        self.temp_future_batch.append(sample)
+        self.future_num_updates += self.online_iter
 
+        if len(self.temp_future_batch) >= self.temp_batch_size:
+            self.generate_waiting_batch(int(self.future_num_updates))
+            temp_batch_logit_num = []
+            for stored_sample in self.temp_future_batch:
+                logit_num = self.update_memory(stored_sample, self.future_sample_num)
+                temp_batch_logit_num.append(logit_num)
+                self.future_sample_num += 1
+            self.logit_num_to_save.append(temp_batch_logit_num)
+            self.temp_future_batch = []
+            self.future_num_updates -= int(self.future_num_updates)
+        return 0
+    '''
+
+    '''
+    def generate_waiting_batch(self, iterations):
+        for i in range(iterations):
+            memory_batch, memory_batch_idx = self.memory.retrieval(self.memory_batch_size)
+            self.waiting_batch.append(self.temp_future_batch + memory_batch)
+            self.waiting_batch_idx.append(self.temp_future_batch_idx + memory_batch_idx)
+    '''
 
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
-            memory_batch, logit_nums = self.memory.retrieval(self.memory_batch_size)
+            memory_batch, logit_nums, memory_batch_idx = self.memory.retrieval(self.memory_batch_size)
             self.waiting_batch.append(self.temp_future_batch + memory_batch)
             self.logit_num_to_get.append(logit_nums)
+            self.waiting_batch_idx.append(self.temp_future_batch_idx + memory_batch_idx)
 
 
     def online_step(self, sample, sample_num, n_worker):
@@ -104,6 +138,8 @@ class DER(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
+            sample_nums = data["sample_nums"].to(self.device)
+
             if len(self.logit_num_to_get[0]) > 0:
                 y2, mask = self.memory.get_logit(self.logit_num_to_get[0], self.num_learned_class)
                 y2, mask = y2.to(self.device), mask.to(self.device)
@@ -113,7 +149,7 @@ class DER(CLManagerBase):
 
             self.before_model_update()
             self.optimizer.zero_grad()
-            logit, loss = self.model_forward(x,y, y2, mask)
+            logit, loss = self.model_forward(x,y, y2, mask, sample_nums)
 
             _, preds = logit.topk(self.topk, 1, True, True)
 
@@ -138,7 +174,7 @@ class DER(CLManagerBase):
                 return_logit = logit.detach().cpu()
         return total_loss / iterations, correct / num_data, return_logit
 
-    def model_forward(self, x, y, y2=None, mask=None, alpha=0.5, beta=0.5):
+    def model_forward(self, x, y, y2=None, mask=None, sample_nums=None, alpha=0.5, beta=0.5):
         criterion = nn.CrossEntropyLoss(reduction='none')
         do_cutmix = self.cutmix and np.random.rand(1) < 0.5
         distill_size = len(y2)//2
@@ -183,32 +219,32 @@ class DER(CLManagerBase):
             #self.total_flops += (len(y) * self.forward_flops)
             return logit, loss
         else:
-            return super().model_forward(x, y)
+            return super().model_forward(x, y, sample_nums)
 
-    def update_memory(self, sample):
-        logit_num = self.reservoir_memory(sample)
+    def update_memory(self, sample, sample_num):
+        logit_num = self.reservoir_memory(sample, sample_num)
         return logit_num
 
 
-    def reservoir_memory(self, sample):
+    def reservoir_memory(self, sample, sample_num):
         self.seen += 1
         if len(self.memory.images) >= self.memory_size:
             j = np.random.randint(0, self.seen)
             if j < self.memory_size:
-                logit_num = self.memory.replace_sample(sample, j)
+                logit_num = self.memory.replace_sample(sample, j, sample_num = sample_num)
             else:
                 logit_num = None
         else:
-            logit_num = self.memory.replace_sample(sample)
+            logit_num = self.memory.replace_sample(sample, sample_num = sample_num)
         return logit_num
 
 class DERMemory(MemoryBase):
-    def __init__(self, memory_size):
-        super().__init__(memory_size)
+    def __init__(self, memory_size, device):
+        super().__init__(memory_size, device)
         self.logits = []
         self.logit_num = []
 
-    def replace_sample(self, sample, idx=None):
+    def replace_sample(self, sample, idx=None, sample_num=None):
         self.cls_count[self.cls_dict[sample['klass']]] += 1
         logit_num = len(self.logits)
         if idx is None:
@@ -218,6 +254,8 @@ class DERMemory(MemoryBase):
             self.labels.append(self.cls_dict[sample['klass']])
             self.logit_num.append(logit_num)
             self.logits.append(None)
+            if sample_num is not None:
+                self.sample_nums.append(sample_num)
         else:
             assert idx < self.memory_size
             self.cls_count[self.labels[idx]] -= 1
@@ -227,6 +265,8 @@ class DERMemory(MemoryBase):
             self.cls_idx[self.cls_dict[sample['klass']]].append(idx)
             self.logit_num[idx] = logit_num
             self.logits.append(None)
+            if sample_num is not None:
+                self.sample_nums[idx] = sample_num
         return logit_num
 
     def add_new_class(self, class_name):
@@ -238,12 +278,14 @@ class DERMemory(MemoryBase):
     def retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
+        memory_batch_idx = []
         batch_logit_num = []
         indices = np.random.choice(range(len(self.images)), size=sample_size, replace=False)
         for i in indices:
             memory_batch.append(self.images[i])
             batch_logit_num.append(self.logit_num[i])
-        return memory_batch, batch_logit_num
+            memory_batch_idx.append(self.sample_nums[i])
+        return memory_batch, batch_logit_num, memory_batch_idx
 
     def get_logit(self, logit_nums, num_classes):
         logits = []

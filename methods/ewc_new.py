@@ -101,13 +101,15 @@ class EWCpp(ER):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
+            sample_nums = data["sample_nums"].to(self.device)
+
             self.before_model_update()
             self.optimizer.zero_grad()
 
             old_params = {n: p.clone().detach() for n, p in self.parameters.items()}
             old_grads = {n: p.grad.clone().detach() for n, p in self.parameters.items() if p.grad is not None}
 
-            logit, loss = self.model_forward(x, y)
+            logit, loss = self.model_forward(x, y, sample_nums)
 
             #self.total_flops += (len(x) * (self.forward_flops + self.backward_flops))
             

@@ -25,6 +25,7 @@ def base_parser():
     parser.add_argument("--knn_top_k", type=int, default=10, help="")
     parser.add_argument("--residual_num", type=int, default=20, help="")
     parser.add_argument("--softmax_temperature", type=float, default=1, help="")
+    parser.add_argument("--selfsup_temp", type=float, default=0.07, help="")
     parser.add_argument("--knn_sigma", type=float, default=1, help="")
     parser.add_argument("--select_criterion", type=str, default="softmax", help="")
     parser.add_argument("--loss_criterion", type=str, default="DR", help="")
@@ -44,6 +45,7 @@ def base_parser():
     parser.add_argument("--ood_num_samples", type=int, default=4)
     parser.add_argument("--use_patch_permutation", action="store_true")
     parser.add_argument("--use_synthetic_regularization", action="store_true")
+    parser.add_argument("--scl_coeff", type=float, default=0.1)
     
     
     # for baseline

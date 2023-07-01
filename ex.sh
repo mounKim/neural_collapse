@@ -1,24 +1,24 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="etf_er_resmem_ver6_sigma10_cifar10_non_distill_non_residual_ood_rotate"
+NOTE="etf_er_resmem_ver10_sigma10_cifar10_non_distill_non_residual_coeff_0.01"
 #"etf_er_resmem_ver3_non_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_top_k_3_softmax_temp_1.0_loss_ce"
 #"etf_er_resmem_ver3_distill_not_pre_trained_sigma10_real_cifar10_iter_1_knn_sigma_0.7_distill_coeff_0.99_distill_beta_0.1_top_k_3_softmax_temp_1.0_loss_ce_classwise_difference_ver2_threshold_0.5"
 #"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k5_residual_num20"
 #"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k3_residual_num20" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
-MODE="etf_er_resmem_ver3"
+MODE="etf_er_resmem_ver5"
 K_COEFF="4"
 TEMPERATURE="0.125"
 TRANSFORM_ON_GPU="--transform_on_gpu"
 #TRANSFORM_ON_GPU=""
 N_WORKER=2
-FUTURE_STEPS=4
+FUTURE_STEPS=3
 EVAL_N_WORKER=2
 EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
 UNFREEZE_RATE=0.25
-SEEDS="1 2 3"
+SEEDS="1"
 KNN_TOP_K="3"
 SELECT_CRITERION="softmax"
 LOSS_CRITERION="DR"
@@ -40,8 +40,9 @@ DISTILL_BETA=0.5
 DISTILL_THRESHOLD=0.5
 DISTILL_STRATEGY="classwise_difference" # naive, classwise, classwise_difference 
 RESIDUAL_STRATEGY="none" # prob, none
-OOD_STRATEGY="rotate" # cutmix, rotate, none
+OOD_STRATEGY="none" # cutmix, rotate, none
 OOD_NUM_SAMPLES=16
+SCL_COEFF=0.01
 #TRANSFORMS=['randaug', 'cutmix']
 
 ### DISTILLATION ###
@@ -49,8 +50,8 @@ OOD_NUM_SAMPLES=16
 USE_FEATURE_DISTILLATION=""
 
 ### STORING PICKLE ###
-STORE_PICKLE="--store_pickle"
-#STORE_PICKLE=""
+#STORE_PICKLE="--store_pickle"
+STORE_PICKLE=""
 
 ### RESIDUAL ###
 #USE_RESIDUAL="--use_residual"
@@ -68,8 +69,8 @@ MODIFIED_KNN=""
 #PATCH_PERMUATION="--use_patch_permutation"
 PATCH_PERMUATION=""
 
-REGULARIZATION="--use_synthetic_regularization"
-#REGULARIZATION=""
+#REGULARIZATION="--use_synthetic_regularization"
+REGULARIZATION=""
 
 
 if [ "$DATASET" == "cifar10" ]; then
@@ -107,8 +108,8 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=2 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE \
-    --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE --ood_strategy $OOD_STRATEGY \
+    CUDA_VISIBLE_DEVICES=3 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE \
+    --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE --ood_strategy $OOD_STRATEGY --scl_coeff $SCL_COEFF \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 --residual_num $RESIDUAL_NUM $RESIDUAL_WARM_UP $MODIFIED_KNN --ood_num_samples $OOD_NUM_SAMPLES \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS --residual_num_threshold $RESIDUAL_NUM_THRESHOLD \
     --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME --softmax_temperature $SOFTMAX_TEMPERATURE $PATCH_PERMUATION $REGULARIZATION \

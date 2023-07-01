@@ -58,6 +58,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         if self.loss_criterion == "DR":
             if self.use_feature_distillation:
                 self.criterion = DR_loss(reduction="none").to(self.device)
+                
             else:
                 self.criterion = DR_loss().to(self.device)
         elif self.loss_criterion == "CE":
@@ -515,8 +516,8 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         
         self.num_updates += self.online_iter
         if self.num_updates >= 1:
-            
-            self.sample_inference([sample])
+            if self.use_feature_distillation:
+                self.sample_inference([sample])
             train_loss, train_acc = self.online_train(iterations=int(self.num_updates))
             self.report_training(sample_num, train_loss, train_acc)
             self.num_updates -= int(self.num_updates)

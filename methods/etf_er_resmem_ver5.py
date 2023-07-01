@@ -202,10 +202,11 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
                 selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
                 scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
 
+                '''
                 feature = feature[:len(feature)//2]
                 target = target[:len(target)//2]
                 y = y[:len(y)//2]
-                
+                '''
                 
                 if self.loss_criterion == "DR":
                     loss = self.criterion(feature, target)

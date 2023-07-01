@@ -24,7 +24,7 @@ class MIR(ER):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory = MemoryBase(self.memory_size, self.device)
-        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.test_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=False)
+        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.test_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=False, test_transform=self.test_transform)
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -41,6 +41,9 @@ class MIR(ER):
 
         self.waiting_batch = []
         self.waiting_batch_idx = []
+        self.cand_batch = []
+        self.cand_batch_idx = []
+
         # 미리 future step만큼의 batch를 load
         for i in range(self.future_steps):
             self.load_batch()
@@ -61,12 +64,33 @@ class MIR(ER):
 
         if len(self.temp_future_batch) >= self.temp_batch_size:
             self.generate_waiting_batch(int(self.future_num_updates))
+            self.generate_candidate_batch(int(self.future_num_updates))
             for future_sample_num, stored_sample in zip(self.temp_future_batch_idx, self.temp_future_batch):
                 self.update_memory(stored_sample, future_sample_num)
             self.temp_future_batch = []
             self.future_num_updates -= int(self.future_num_updates)
         self.future_sample_num += 1
         return 0
+
+    def generate_candidate_batch(self, iterations):
+        for i in range(iterations):
+            candidate_batch, candidate_batch_idx = self.memory.retrieval(self.cand_size)
+            self.cand_batch.append(candidate_batch)
+            self.cand_batch_idx.append(candidate_batch_idx)
+
+    def load_batch(self):
+        stream_end = False
+        while len(self.waiting_batch) == 0:
+            stream_end = self.memory_future_step()
+            if stream_end:
+                break
+        if not stream_end:
+            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0])
+            self.cand_loader.load_batch(self.cand_batch[0], self.memory.cls_dict, self.cand_batch_idx[0])
+            del self.waiting_batch[0]
+            del self.waiting_batch_idx[0]
+            del self.cand_batch[0]
+            del self.cand_batch_idx[0]            
 
 
     # loader로부터 load된 batch를 받아오는 것

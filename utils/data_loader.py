@@ -40,13 +40,21 @@ class MultiProcessLoader():
         self.workers = []
         self.index_queues = []
         self.test_transform = test_transform
-
         for i in range(self.n_workers):
             index_queue = multiprocessing.Queue()
             index_queue.cancel_join_thread()
             result_queue = multiprocessing.Queue()
             result_queue.cancel_join_thread()
-            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            '''
+            if test_transform is not None:
+                w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            else:
+            '''
+            #w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, None, True, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            if self.test_transform is not None:
+                print("self.test_transform")
+                print(self.test_transform)
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker, self.test_transform))
             w.daemon = True
             w.start()
             self.workers.append(w)
@@ -82,6 +90,7 @@ class MultiProcessLoader():
         data_1 = dict()
         data_2 = dict()
         images = []
+        test_images = []
         labels = []
         sample_nums = []
 
@@ -89,22 +98,17 @@ class MultiProcessLoader():
             loaded_samples = self.result_queues[i].get(timeout=300.0)
             if loaded_samples is not None:
                 images.append(loaded_samples["image"])
+                test_images.append(loaded_samples["test_image"])
                 labels.append(loaded_samples["label"])
                 sample_nums.append(loaded_samples["sample_num"])
 
         if len(images) > 0:
             images = torch.cat(images)
+            test_images = torch.cat(test_images)
             labels = torch.cat(labels)
             sample_nums = torch.cat(sample_nums)
-            if self.transform_on_gpu and not self.transform_on_worker:
-                print("here")
-                train_images = self.transform(images.to(self.device))
-            else:
-                train_images = images
 
-            test_images = images
-
-            data_1['image'] = train_images
+            data_1['image'] = images
             data_1['label'] = labels
             data_1['sample_nums'] = sample_nums
 

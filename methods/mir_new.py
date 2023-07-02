@@ -24,7 +24,8 @@ class MIR(ER):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory = MemoryBase(self.memory_size, self.device)
-        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=True, test_transform=self.test_transform)
+        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, transform_on_gpu=self.transform_on_gpu, cpu_transform=self.cpu_transform, device=self.device, use_kornia=False, transform_on_worker=self.transform_on_worker, test_transform=self.test_gpu_transform)
+        #self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=False, test_transform=self.test_transform)
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -129,9 +130,6 @@ class MIR(ER):
                 new_model = copy.deepcopy(self.model)
                 for name, param in new_model.named_parameters():
                     param.data = param.data - lr * grads[name]
-                print("data['image']", data['image'].shape)
-                print("cands[0]['image']", cands[0]['image'].shape)
-                print("cands[1]['image']", cands[1]['image'].shape)
 
                 mem_x = cands[1]['image']
                 mem_y = cands[1]['label']
@@ -177,8 +175,6 @@ class MIR(ER):
                 sample_nums = torch.cat([sample_nums, mem_sample_nums])
 
 
-            print("y")
-            print(y)
             self.optimizer.zero_grad()
             logit, loss = self.model_forward(x, y, sample_nums)
             _, preds = logit.topk(self.topk, 1, True, True)

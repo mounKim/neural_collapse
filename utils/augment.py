@@ -145,7 +145,13 @@ def get_transform(dataset, transform_list, transform_on_gpu=False):
         ]
     )
 
-    return train_transform, test_transform, cpu_transform, n_classes
+    test_gpu_transform = transforms.Compose(
+        [
+            transforms.Normalize(mean, std)
+        ]
+    )
+
+    return train_transform, test_transform, cpu_transform, test_gpu_transform, n_classes
 
 
 def select_autoaugment(dataset):

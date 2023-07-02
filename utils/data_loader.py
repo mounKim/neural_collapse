@@ -27,7 +27,7 @@ logger = logging.getLogger()
 
 
 class MultiProcessLoader():
-    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True):
+    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True, test_transform=None):
         self.n_workers = n_workers
         self.cls_dict = cls_dict
         self.transform = transform
@@ -39,6 +39,8 @@ class MultiProcessLoader():
         self.result_queues = []
         self.workers = []
         self.index_queues = []
+        self.test_transform = test_transform
+
         for i in range(self.n_workers):
             index_queue = multiprocessing.Queue()
             index_queue.cancel_join_thread()
@@ -73,7 +75,47 @@ class MultiProcessLoader():
             
         for i in range(self.n_workers):
             self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
-            
+
+
+    @torch.no_grad()
+    def get_two_batches(self):
+        data_1 = dict()
+        data_2 = dict()
+        images = []
+        labels = []
+        sample_nums = []
+
+        for i in range(self.n_workers):
+            loaded_samples = self.result_queues[i].get(timeout=300.0)
+            if loaded_samples is not None:
+                images.append(loaded_samples["image"])
+                labels.append(loaded_samples["label"])
+                sample_nums.append(loaded_samples["sample_num"])
+
+        if len(images) > 0:
+            images = torch.cat(images)
+            labels = torch.cat(labels)
+            sample_nums = torch.cat(sample_nums)
+            if self.transform_on_gpu and not self.transform_on_worker:
+                print("here")
+                train_images = self.transform(images.to(self.device))
+            else:
+                train_images = images
+
+            test_images = images
+
+            data_1['image'] = train_images
+            data_1['label'] = labels
+            data_1['sample_nums'] = sample_nums
+
+            data_2['image'] = test_images
+            data_2['label'] = labels
+            data_2['sample_nums'] = sample_nums
+
+            return data_1, data_2
+        else:
+            return None
+
     @torch.no_grad()
     def get_batch(self):
         data = dict()

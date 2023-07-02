@@ -24,7 +24,7 @@ class MIR(ER):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory = MemoryBase(self.memory_size, self.device)
-        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.test_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=False, test_transform=self.test_transform)
+        self.cand_loader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, transform_on_gpu=False, cpu_transform=None, device=self.device, use_kornia=False, transform_on_worker=True, test_transform=self.test_transform)
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -96,7 +96,7 @@ class MIR(ER):
     # loader로부터 load된 batch를 받아오는 것
     def get_batch(self):
         batch = self.dataloader.get_batch()
-        cand_batch = self.cand_loader.get_batch()
+        cand_batch = self.cand_loader.get_two_batches()
         self.load_batch()
         return batch, cand_batch
 
@@ -108,10 +108,13 @@ class MIR(ER):
         for i in range(iterations):
             data, cands = self.get_batch()
             memory_cands_test = cands
-            str_x = data['image'][:self.temp_batch_size]
-            str_y = data['label'][:self.temp_batch_size]
+            str_x = data['image']#[:self.temp_batch_size]
+            str_y = data['label']#[:self.temp_batch_size]
+            str_sample_nums = data["sample_nums"]#[:self.temp_batch_size]
+
             x = str_x.to(self.device)
             y = str_y.to(self.device)
+            sample_nums = str_sample_nums.to(self.device)
 
             logit = self.model(x)
             loss = self.criterion(logit, y)
@@ -126,48 +129,58 @@ class MIR(ER):
                 new_model = copy.deepcopy(self.model)
                 for name, param in new_model.named_parameters():
                     param.data = param.data - lr * grads[name]
-                x = memory_cands_test['image']
-                y = memory_cands_test['label']
-                x = x.to(self.device)
-                y = y.to(self.device)
+                print("data['image']", data['image'].shape)
+                print("cands[0]['image']", cands[0]['image'].shape)
+                print("cands[1]['image']", cands[1]['image'].shape)
+
+                mem_x = cands[1]['image']
+                mem_y = cands[1]['label']
+                #memory_sample_nums = memory_cands_test["sample_nums"]
+
+                mem_x = mem_x.to(self.device)
+                mem_y = mem_y.to(self.device)
+                #memory_sample_nums = memory_sample_nums.to(self.device)
+
                 with torch.no_grad():
                     if self.use_amp:
                         with torch.cuda.amp.autocast():
-                            logit_pre = self.model(x)
-                            logit_post = new_model(x)
-                            pre_loss = F.cross_entropy(logit_pre, y, reduction='none')
-                            post_loss = F.cross_entropy(logit_post, y, reduction='none')
+                            logit_pre = self.model(mem_x)
+                            logit_post = new_model(mem_x)
+                            pre_loss = F.cross_entropy(logit_pre, mem_y, reduction='none')
+                            post_loss = F.cross_entropy(logit_post, mem_y, reduction='none')
                             scores = post_loss - pre_loss
                     else:
-                        logit_pre = self.model(x)
-                        logit_post = new_model(x)
-                        pre_loss = F.cross_entropy(logit_pre, y, reduction='none')
-                        post_loss = F.cross_entropy(logit_post, y, reduction='none')
+                        logit_pre = self.model(mem_x)
+                        logit_post = new_model(mem_x)
+                        pre_loss = F.cross_entropy(logit_pre, mem_y, reduction='none')
+                        post_loss = F.cross_entropy(logit_post, mem_y, reduction='none')
                         scores = post_loss - pre_loss
                     
-                    
-                    self.total_flops += (3 * len(logit_pre)) / 10e9
-                    self.total_flops += (2 * len(x) * self.forward_flops)    
-                selected_samples = torch.argsort(scores, descending=True)[:self.memory_batch_size]
+                    #self.total_flops += (3 * len(logit_pre)) / 10e9
+                    #self.total_flops += (2 * len(x) * self.forward_flops)    
+                selected_samples = torch.argsort(scores, descending=True)[:self.memory_batch_size].long()
 
-                mem_x_cands = data["image"][self.temp_batch_size:]
-                mem_y_cands = data["label"][self.temp_batch_size:]
-                mem_x = mem_x_cands[selected_samples.cpu()]
-                mem_y = mem_y_cands[selected_samples.cpu()]
+                mem_x_cands = cands[0]["image"]
+                mem_y_cands = cands[0]["label"]
+                mem_sample_nums_cands = cands[0]["sample_nums"]
+
+                mem_x = mem_x_cands[selected_samples.cpu()].to(self.device)
+                mem_y = mem_y_cands[selected_samples.cpu()].to(self.device)
+                mem_sample_nums = mem_sample_nums_cands[selected_samples.cpu()].to(self.device)
                 
                 '''
                 mem_indices = memory_cands['index'][selected_samples]
                 self.memory.update_std(mem_indices)
                 '''
-                
-                x = torch.cat([str_x, mem_x])
-                y = torch.cat([str_y, mem_y])
-                x = x.to(self.device)
-                y = y.to(self.device)
+                x = torch.cat([x, mem_x])
+                y = torch.cat([y, mem_y])
+                sample_nums = torch.cat([sample_nums, mem_sample_nums])
 
 
+            print("y")
+            print(y)
             self.optimizer.zero_grad()
-            logit, loss = self.model_forward(x, y)
+            logit, loss = self.model_forward(x, y, sample_nums)
             _, preds = logit.topk(self.topk, 1, True, True)
 
             if self.use_amp:
@@ -182,6 +195,6 @@ class MIR(ER):
             total_loss += loss.item()
             correct += torch.sum(preds == y.unsqueeze(1)).item()
             num_data += y.size(0)
-            self.total_flops += (self.batch_size * (self.forward_flops + self.backward_flops))
+            #self.total_flops += (self.batch_size * (self.forward_flops + self.backward_flops))
             
         return total_loss / iterations, correct / num_data

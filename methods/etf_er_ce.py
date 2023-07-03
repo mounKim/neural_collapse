@@ -32,7 +32,7 @@ class ETF_ER_CE(CLManagerBase):
         self.feature_std_mean_list = []
         self.stds_list = []
         self.compute_accuracy = Accuracy(topk=self.topk)
-        self.model = select_model(self.model_name, self.dataset, 1, pre_trained=True).to(self.device)
+        self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False).to(self.device)
         print("model")
         print(self.model)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)

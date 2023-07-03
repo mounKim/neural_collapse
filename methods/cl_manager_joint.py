@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from sklearn.manifold import TSNE
 import seaborn as sns
 from matplotlib import pyplot as plt
-from utils.augment import my_segmentation_transforms
+
 from flops_counter.ptflops import get_model_complexity_info
 from utils.data_loader import ImageDataset, cutmix_data, MultiProcessLoader, get_statistics
 from utils.augment import get_transform
@@ -24,11 +24,11 @@ from utils.train_utils import select_model, select_optimizer, select_scheduler
 logger = logging.getLogger()
 writer = SummaryWriter("tensorboard")
 
-class CLManagerBase:
+class CLManagerJoint:
     def __init__(self, train_datalist, test_datalist, device, **kwargs):
 
         self.device = device
-        self.writer = SummaryWriter(f'tensorboard/{kwargs["dataset"]}/{kwargs["note"]}/seed_{kwargs["rnd_seed"]}')
+
         self.method_name = kwargs["mode"]
         self.dataset = kwargs["dataset"]
         self.sigma = kwargs["sigma"]
@@ -46,10 +46,10 @@ class CLManagerBase:
         if self.sched_name == "default":
             self.sched_name = 'const'
         self.lr = kwargs["lr"]
-        self.real_num_classes = kwargs["num_class"]
+
         assert kwargs["temp_batchsize"] <= kwargs["batchsize"]
         self.batch_size = kwargs["batchsize"]
-        self.temp_batch_size = kwargs["temp_batchsize"]
+        self.temp_batch_size = 0
         self.memory_batch_size = self.batch_size - self.temp_batch_size
         self.memory_size -= self.temp_batch_size
         self.transforms = kwargs["transforms"]
@@ -64,11 +64,11 @@ class CLManagerBase:
         self.transform_on_gpu = kwargs["transform_on_gpu"]
         self.use_kornia = kwargs["use_kornia"]
         self.transform_on_worker = kwargs["transform_on_worker"]
-        self.use_synthetic_regularization = kwargs["use_synthetic_regularization"]
+
         self.eval_period = kwargs["eval_period"]
         self.topk = kwargs["topk"]
         self.f_period = kwargs["f_period"]
-        self.ood_strategy = kwargs["ood_strategy"]
+
         self.use_amp = kwargs["use_amp"]
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
@@ -77,12 +77,11 @@ class CLManagerBase:
         self.test_datalist = test_datalist
         self.cls_dict = {}
         self.total_samples = len(self.train_datalist)
-        
+
         self.train_transform, self.test_transform, self.cpu_transform, self.n_classes = get_transform(self.dataset, self.transforms, self.transform_on_gpu)
         self.cutmix = "cutmix" in kwargs["transforms"]
 
-        self.model = select_model(self.model_name, self.dataset, 1,).to(self.device)
-        # self.model = select_model(self.model_name, self.dataset, 1, pre_trained=True).to(self.device)
+        self.model = select_model(self.model_name, self.dataset, 1).to(self.device)
         print("model")
         print(self.model)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
@@ -91,12 +90,10 @@ class CLManagerBase:
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory_dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = MemoryBase(self.memory_size, self.device, self.ood_strategy)
+        self.memory = MemoryBase(self.memory_size)
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
-        self.temp_future_batch_idx = []
-
         self.num_updates = 0
         self.future_num_updates = 0
         self.sample_num = 0
@@ -126,83 +123,47 @@ class CLManagerBase:
         self.total_samples = num_samples[self.dataset]
 
         self.waiting_batch = []
-        self.waiting_batch_idx = []
-        self.initialize_future()
+        #self.initialize_future()
 
         self.total_flops = 0.0
         self.writer = SummaryWriter(f'tensorboard/{self.dataset}/{self.note}/seed_{self.rnd_seed}')
-        self.store_pickle = kwargs['store_pickle']
-        self.select_criterion = kwargs['select_criterion']
-        self.knn_top_k = kwargs['knn_top_k']
-        self.softmax_temperature = kwargs['softmax_temperature']
-        self.knn_sigma = kwargs['knn_sigma']
-        self.loss_criterion = kwargs['loss_criterion']
-        self.distill_coeff = kwargs['distill_coeff']
 
 
     # Memory 새로 정의 (not MemoryBase)
     def initialize_future(self):
-        self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
+        self.data_stream = None #iter(self.train_datalist)
+        #self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         #self.memory = MemoryBase(self.memory_size)
-        self.memory_list = []
+        #self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
-        self.temp_future_batch_idx = []
         self.num_updates = 0
         self.future_num_updates = 0
         self.train_count = 0
-        self.num_learned_class = 0
-        self.num_learning_class = 1
-        self.exposed_classes = []
+        #self.num_learned_class = 0
+        #self.num_learning_class = 1
         self.seen = 0
         self.future_sample_num = 0
         self.future_sampling = True
         self.future_retrieval = True
+
+        self.rep_indices = self.memory.get_representative_samples()
 
         self.waiting_batch = []
         # 미리 future step만큼의 batch를 load
         for i in range(self.future_steps):
             self.load_batch()
 
-    def balanced_replace_memory(self, sample, sample_num=None):
-        if len(self.memory.images) >= self.memory_size:
-            label_frequency = copy.deepcopy(self.memory.cls_count)
-            label_frequency[self.memory.cls_dict[sample['klass']]] += 1
-            cls_to_replace = np.random.choice(
-                np.flatnonzero(np.array(label_frequency) == np.array(label_frequency).max()))
-            idx_to_replace = np.random.choice(self.memory.cls_idx[cls_to_replace])
-            self.memory.replace_sample(sample, idx_to_replace, sample_num = sample_num)
-        else:
-            self.memory.replace_sample(sample, sample_num = sample_num)
-
     def memory_future_step(self):
-        try:
-            sample = next(self.data_stream)
-        except:
-            return 1
-        if sample["klass"] not in self.memory.cls_list:
-            self.memory.add_new_class(sample["klass"])
-            self.dataloader.add_new_class(self.memory.cls_dict)
-        self.temp_future_batch.append(sample)
-        self.temp_future_batch_idx.append(self.future_sample_num)
-        self.future_num_updates += self.online_iter
-
-        if len(self.temp_future_batch) >= self.temp_batch_size:
-            self.generate_waiting_batch(int(self.future_num_updates))
-            for stored_sample in self.temp_future_batch:
-                self.update_memory(sample, self.future_sample_num)
-                self.future_sample_num += 1
-                #self.update_memory(stored_sample)
-            self.temp_future_batch = []
-            self.future_num_updates -= int(self.future_num_updates)
+        # iteration=1
+        self.generate_waiting_batch(1)
         return 0
 
     def update_memory(self, sample):
         pass
 
-    def get_whole_batch(self):
-        self.memory_dataloader.load_batch(self.memory.whole_retrieval(), self.memory.cls_dict, self.memory.sample_nums)
+    def get_whole_batch(self, index=None):
+        self.memory_dataloader.load_batch(self.memory.whole_retrieval(index), self.memory.cls_dict)
         batch = self.memory_dataloader.get_batch()
         return batch
 
@@ -221,17 +182,17 @@ class CLManagerBase:
             if stream_end:
                 break
         if not stream_end:
-            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0])
+            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict)
             del self.waiting_batch[0]
-            del self.waiting_batch_idx[0]
 
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
-            memory_batch, memory_batch_idx = self.memory.retrieval(self.memory_batch_size)
-            self.waiting_batch.append(self.temp_future_batch + memory_batch)
-            self.waiting_batch_idx.append(self.temp_future_batch_idx + memory_batch_idx)
+            self.waiting_batch.append(self.temp_future_batch + self.memory.retrieval(self.memory_batch_size))
 
-    def online_step(self, sample, sample_num, n_worker):
+    def online_step(self, n_worker):
+        train_loss, train_acc = self.online_train(iterations=1)
+        self.report_training(sample_num, train_loss, train_acc)
+        '''
         self.sample_num = sample_num
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'])
@@ -243,6 +204,7 @@ class CLManagerBase:
                 self.report_training(sample_num, train_loss, train_acc)
                 self.num_updates -= int(self.num_updates)
             self.temp_batch = []
+        '''
 
     def add_new_class(self, class_name):
         self.cls_dict[class_name] = len(self.exposed_classes)
@@ -263,11 +225,13 @@ class CLManagerBase:
         if 'reset' in self.sched_name:
             self.update_schedule(reset=True)
 
-    def infer_whole_memory(self, fc_weight):
+    def infer_whole_memory(self, fc_weight, index=None):
         feature_dict = {}
         with torch.no_grad():
             self.model.train()
-            data = self.get_whole_batch()
+
+            data = self.get_whole_batch(index)
+
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
 
@@ -281,38 +245,29 @@ class CLManagerBase:
                     feature_dict[u_y].append(torch.index_select(features, 0, indices))
             self.check_neural_collapse(feature_dict, fc_weight)
 
-    def save_features(self, feature_pickle_name, class_pickle_name):
+    def save_features(self, feature_pickle_name, class_pickle_name, index=None):
         feature_dict = {}
         with torch.no_grad():
             self.model.train()
-            data = self.get_whole_batch()
+            data = self.get_whole_batch(index)
             batchsize = 512
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-            new_x, new_y = my_segmentation_transforms(x, y, self.real_num_classes)
-            new_x = new_x.to(self.device)
-            new_y = new_y.to(self.device)
-            
+
             features = []
-            for i in range(len(self.memory) // batchsize + 1):
+            for i in range(len(data) // batchsize + 1):
                 _, feature = self.model(x[i * batchsize:min((i + 1) * batchsize, len(x))], get_feature=True)
-                features.append(feature)
-            
-            if self.ood_strategy != "none" and self.use_synthetic_regularization:
-                for i in range(len(new_x) // batchsize + 1):
-                    _, feature = self.model(new_x[i * batchsize:min((i + 1) * batchsize, len(new_x))], get_feature=True)
-                    features.append(feature)
-                y = torch.cat([y, new_y])
+                features.append(feature.cpu())
             #self.model(torch.cat(x[i * batchsize:min((i + 1) * batchsize, len(x))]).to(self.device)) for i in range(512 // batchsize))], dim=0) 
             #_, features = self.model(x, get_feature=True)
-            features = torch.cat(features,dim=0)
+            features = torch.cat(features, dim=0)
             unique_y = torch.unique(y).tolist()
             for u_y in unique_y:
                 indices = (y == u_y).nonzero(as_tuple=True)[0]
                 if u_y not in feature_dict.keys():
-                    feature_dict[u_y] = [torch.index_select(features, 0, indices)]
+                    feature_dict[u_y] = [torch.index_select(features, 0, indices.cpu())]
                 else:
-                    feature_dict[u_y].append(torch.index_select(features, 0, indices))
+                    feature_dict[u_y].append(torch.index_select(features, 0, indices.cpu()))
 
         #pickle_name = str(int(self.online_iter)) + '_dist_dict.pickle'
         
@@ -332,11 +287,12 @@ class CLManagerBase:
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-            sample_nums = data["sample_nums"].to(self.device)
+
             self.before_model_update()
 
             self.optimizer.zero_grad()
-            logit, loss = self.model_forward(x,y, sample_nums)
+
+            logit, loss = self.model_forward(x,y)
 
             _, preds = logit.topk(self.topk, 1, True, True)
 
@@ -381,9 +337,9 @@ class CLManagerBase:
         return logit, loss
     '''
 
-    def model_forward(self, x, y, sample_nums, get_feature=False):
-        do_cutmix = self.cutmix and np.random.rand(1) < 0.5
-        #do_cutmix = False
+    def model_forward(self, x, y, get_feature=False):
+        #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
+        do_cutmix = False
         if do_cutmix:
             x, labels_a, labels_b, lam = cutmix_data(x=x, y=y, alpha=1.0)
             with torch.cuda.amp.autocast(self.use_amp):
@@ -408,27 +364,20 @@ class CLManagerBase:
             return logit, loss
 
     def report_training(self, sample_num, train_loss, train_acc):
-        #writer.add_scalar(f"train/loss", train_loss, sample_num)
-        #writer.add_scalar(f"train/acc", train_acc, sample_num)
+        writer.add_scalar(f"train/loss", train_loss, sample_num)
+        writer.add_scalar(f"train/acc", train_acc, sample_num)
         logger.info(
             f"Train | Sample # {sample_num} | train_loss {train_loss:.4f} | train_acc {train_acc:.4f} | TFLOPs {self.total_flops/1000:.2f} | "
             f"running_time {datetime.timedelta(seconds=int(time.time() - self.start_time))} | "
             f"ETA {datetime.timedelta(seconds=int((time.time() - self.start_time) * (self.total_samples-sample_num) / sample_num))}"
         )
 
-    def report_test(self, sample_num, avg_loss, avg_acc, cls_acc):
-        print("cls_acc")
-        print(cls_acc)
-        #writer.add_scalar(f"test/loss", avg_loss, sample_num)
-        #writer.add_scalar(f"test/acc", avg_acc, sample_num)
+    def report_test(self, sample_num, avg_loss, avg_acc):
+        writer.add_scalar(f"test/loss", avg_loss, sample_num)
+        writer.add_scalar(f"test/acc", avg_acc, sample_num)
         logger.info(
             f"Test | Sample # {sample_num} | test_loss {avg_loss:.4f} | test_acc {avg_acc:.4f} | TFLOPs {self.total_flops/1000:.2f}"
         )
-        for idx in range(self.num_learned_class):
-            acc = cls_acc[idx]
-            logger.info(
-                f"Class_Acc | Sample # {sample_num} | cls{idx} {acc:.4f}"
-            )            
 
     def update_schedule(self, reset=False):
         if reset:
@@ -442,7 +391,6 @@ class CLManagerBase:
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
         test_df = pd.DataFrame(test_list)
         exp_test_df = test_df[test_df['klass'].isin(self.exposed_classes)]
-        print("exp_test_df", len(exp_test_df))
         test_dataset = ImageDataset(
             exp_test_df,
             dataset=self.dataset,
@@ -457,7 +405,7 @@ class CLManagerBase:
             num_workers=n_worker,
         )
         eval_dict = self.evaluation(test_loader, self.criterion)
-        self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"], eval_dict["cls_acc"])
+        self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"])
 
         if sample_num >= self.f_next_time:
             self.get_forgetting(sample_num, test_list, cls_dict, batch_size, n_worker)
@@ -620,8 +568,8 @@ class CLManagerBase:
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
 
     def _interpret_pred(self, y, pred):
-        ret_num_data = torch.zeros(self.n_classes).to(self.device)
-        ret_corrects = torch.zeros(self.n_classes).to(self.device)
+        ret_num_data = torch.zeros(self.n_classes)
+        ret_corrects = torch.zeros(self.n_classes)
 
         xlabel_cls, xlabel_cnt = y.unique(return_counts=True)
         for cls_idx, cnt in zip(xlabel_cls, xlabel_cnt):
@@ -820,11 +768,10 @@ class CLManagerBase:
 
 
 class MemoryBase:
-    def __init__(self, memory_size, device, ood_strategy=None):
+    def __init__(self, memory_size):
         self.memory_size = memory_size
         self.images = []
         self.labels = []
-        self.sample_nums = []
         self.update_buffer = ()
         self.cls_dict = dict()
         self.cls_list = []
@@ -836,21 +783,25 @@ class MemoryBase:
         self.current_labels = []
         self.current_cls_count = [0 for _ in self.cls_list]
         self.current_cls_idx = [[] for _ in self.cls_list]
-        self.ood_strategy = ood_strategy
-        self.device = device
 
     def __len__(self):
         return len(self.images)
 
-    def replace_sample(self, sample, idx=None, sample_num=None):
+    def get_representative_samples(self):
+        total_index = []
+        num_per_cls = len(self.images)//(len(self.cls_idx)*100)
+        for i, idxs in enumerate(self.cls_idx):
+            print("i", i, "nums", num_per_cls)
+            total_index.extend(np.random.choice(idxs, size=num_per_cls, replace=False))
+        return total_index
+
+    def replace_sample(self, sample, idx=None):
         self.cls_count[self.cls_dict[sample['klass']]] += 1
         if idx is None:
             assert len(self.images) < self.memory_size
             self.cls_idx[self.cls_dict[sample['klass']]].append(len(self.images))
             self.images.append(sample)
             self.labels.append(self.cls_dict[sample['klass']])
-            if sample_num is not None:
-                self.sample_nums.append(sample_num)
         else:
             assert idx < self.memory_size
             self.cls_count[self.labels[idx]] -= 1
@@ -858,9 +809,7 @@ class MemoryBase:
             self.images[idx] = sample
             self.labels[idx] = self.cls_dict[sample['klass']]
             self.cls_idx[self.cls_dict[sample['klass']]].append(idx)
-            if sample_num is not None:
-                self.sample_nums[idx] = sample_num
-                
+
     def add_new_class(self, class_name):
         self.cls_dict[class_name] = len(self.cls_list)
         self.cls_list.append(class_name)
@@ -868,51 +817,20 @@ class MemoryBase:
         self.cls_idx.append([])
         self.class_usage_count = np.append(self.class_usage_count, 0.0)
         print("!!added", class_name)
-        print("self.cls_dict", self.cls_dict)
+        #print("self.cls_dict", self.cls_dict)
 
-    def whole_retrieval(self):
+    def whole_retrieval(self, indices=None):
         memory_batch = []
-        indices = list(range(len(self.images)))
+        if indices is None:
+            indices = list(range(len(self.images)))
         for i in indices:
             memory_batch.append(self.images[i])
         return memory_batch
 
-    def generate_ood_class(self, num_samples=1):
-        if self.ood_strategy == "cutmix":
-            if len(self.cls_idx) <= 1:
-                return None
-            pair = np.random.choice(len(self.cls_idx), 2, replace=False)
-            pair.sort()
-            pair = tuple(pair)
-            num_samples = min([len(self.cls_idx[pair[0]]), len(self.cls_idx[pair[1]]), num_samples])
-            index_1 = np.random.choice(self.cls_idx[pair[0]], num_samples)
-            index_2 = np.random.choice(self.cls_idx[pair[1]], num_samples)
-
-            x1, y1 = np.array(self.images)[index_1], np.array(self.labels)[index_1]
-            x2, y2 = np.array(self.images)[index_2], np.array(self.labels)[index_2]    
-            return (pair, x1, x2)
-        
-        elif self.ood_strategy == "rotate":
-            index = np.random.choice(range(len(self.images)), min(num_samples, len(self.images)), replace=False)
-            x = np.array(self.images)[index]
-            y = np.array(self.labels)[index]
-            '''
-            cls = np.random.choice(len(self.cls_idx), 1)
-            num_samples = min([len(self.cls_idx[cls[0]]), num_samples])
-            index = np.random.choice(self.cls_idx[cls[0]], num_samples)
-            x = np.array(self.images)[index]
-            '''
-            return (x, y)
-        
-        #elif self.ood_strategy == "rotate":
-            
-
     def retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
-        memory_batch_idx = []
         indices = np.random.choice(range(len(self.images)), size=sample_size, replace=False)
         for i in indices:
             memory_batch.append(self.images[i])
-            memory_batch_idx.append(self.sample_nums[i])
-        return memory_batch, memory_batch_idx
+        return memory_batch

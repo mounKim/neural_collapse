@@ -9,7 +9,7 @@ from sklearn.manifold import TSNE
 import seaborn as sns
 import scipy.linalg as scilin
 
-method = "etf_sigma10"
+method = "etf_joint_sigma0"
 iteration = 1.0
 fig_name = method + "_iter" + str(iteration) 
 prefix = method + "_num_"
@@ -66,6 +66,7 @@ def get_nc3(M, A, K):
     return LA.matrix_norm(nc3_matrix)
 
 def compute_ETF(W):
+    W = W.cuda()
     K = W.shape[0]
     WWT = torch.mm(W, W.T)
     WWT /= torch.norm(WWT, p='fro')
@@ -102,7 +103,7 @@ within_std = {}
 between_std = []
 between_dist_std = {}
 
-for index in range(100, 30000, 100):
+for index in range(100, 50000, 100):
     fc_pickle_name = prefix + str(index) + "_iter" + str(iteration) + "_fc.pickle"
     feature_pickle_name = prefix + str(index) + "_iter" + str(iteration) + "_feature.pickle"
     class_pickle_name = prefix + str(index) + "_iter" + str(iteration) + "_class.pickle"
@@ -117,6 +118,7 @@ for index in range(100, 30000, 100):
         class_dict = pickle.load(f)
 
     mean_vec_list = {}
+    mean_vec_tensor_list = []
 
     # feature normalize
     mu_G = 0
@@ -127,7 +129,9 @@ for index in range(100, 30000, 100):
         mean_vec_list[cls] = torch.mean(feature_dict[cls], dim=0)
         mu_G += torch.sum(feature_dict[cls], dim=0)
         num_feature += len(feature_dict[cls])
+        mean_vec_tensor_list.append(mean_vec_list[cls])
 
+    mean_vec_tensor_list = torch.stack(mean_vec_tensor_list)
     mu_G /= num_feature
     
     #mean_vec_list = [torch.mean(feature_dict[cls], dim=0) for cls in list(feature_dict.keys())]
@@ -197,7 +201,7 @@ for index in range(100, 30000, 100):
     ### check feature-classifier distance ###
     for feature_key in feature_dict.keys():
         # dist = ((mean_vec_list[feature_key].cpu() - fc_dict[feature_key].cpu())**2).sum().sqrt().item()
-        print("fc_dict shape", fc_dict.shape)
+        #print("fc_dict shape", fc_dict.shape)
         dist = get_angle(mean_vec_list[feature_key].cpu(), fc_dict[feature_key].cpu())
         if feature_key not in dist_dict.keys():
             dist_dict[feature_key] = [dist]
@@ -221,7 +225,7 @@ for index in range(100, 30000, 100):
     nc3_list.append(nc3_value)
 
     ### check ETF (modified nc2) ###
-    etf_value = compute_ETF(fc_dict)
+    etf_value = compute_ETF(mean_vec_tensor_list)
     etf_list.append(etf_value)
 
     ### check W_H_relation (modieifed nc3) ###
@@ -332,7 +336,7 @@ plt.figure()
 plt.xlabel("# of iteration (X 100)", fontsize=15)
 plt.ylabel("NC2", fontsize=15)
 #plt.plot(range(len(etf_list)), savgol_filter(etf_list, 15, 3), linewidth='3', color='b')
-plt.plot(range(len(etf_list)), savgol_filter(etf_list, 7, 3), linewidth='3', color='b')
+plt.plot(range(len(etf_list)), etf_list, linewidth='3', color='b')
 for i in range(1,4):
     plt.axvline(x=i*100, color='r', linestyle='--', linewidth=2)
 plt.title("NC2", fontsize=20)

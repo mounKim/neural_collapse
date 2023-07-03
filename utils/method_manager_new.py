@@ -11,8 +11,15 @@ from methods.aser_new import ASER
 from methods.bic_new import BiasCorrection
 from methods.etf import ETF
 from methods.etf_er import ETF_ER
+from methods.etf_er_joint import ETF_ER_JOINT
 from methods.etf_er_ce import ETF_ER_CE
-from methods.twf_new import TWF
+from methods.etf_er_resmem_ver1 import ETF_ER_RESMEM_VER1
+from methods.etf_er_resmem_ver2 import ETF_ER_RESMEM_VER2
+from methods.etf_er_resmem_ver3 import ETF_ER_RESMEM_VER3
+from methods.etf_er_resmem_ver4 import ETF_ER_RESMEM_VER4
+from methods.etf_er_resmem_ver5 import ETF_ER_RESMEM_VER5
+from methods.etf_er_initial import ETF_ER_INITIAL
+from methods.etf_er_resmem import ETF_ER_RESMEM
 from methods.baseline_new_joint import BASELINE_JOINT
 logger = logging.getLogger()
 
@@ -41,8 +48,64 @@ def select_method(args, train_datalist, test_datalist, device):
             device=device,
             **kwargs,
         )
+    elif args.mode == "etf_er_joint":
+        method = ETF_ER_JOINT(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
     elif args.mode == "etf_er_ce":
         method = ETF_ER_CE(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_initial":
+        method = ETF_ER_INITIAL(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem":
+        method = ETF_ER_RESMEM(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver1":
+        method = ETF_ER_RESMEM_VER1(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver2":
+        method = ETF_ER_RESMEM_VER2(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver3":
+        method = ETF_ER_RESMEM_VER3(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver4":
+        method = ETF_ER_RESMEM_VER4(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver5":
+        method = ETF_ER_RESMEM_VER5(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,

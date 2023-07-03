@@ -1,14 +1,15 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="baseline_joint_disjoint_cifar10_mem500_iter_1_collapse_check" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
-MODE="baseline_joint"
+NOTE="etf_er_not_pre_trained_joint" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+MODE="etf_er_joint"
 K_COEFF="4"
 TEMPERATURE="0.125"
-TRANSFORM_ON_GPU="--transform_on_gpu"
-N_WORKER=4
-FUTURE_STEPS=4
-EVAL_N_WORKER=4
+#TRANSFORM_ON_GPU="--transform_on_gpu"
+TRANSFORM_ON_GPU=""
+N_WORKER=2
+FUTURE_STEPS=3
+EVAL_N_WORKER=3
 EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
@@ -30,7 +31,7 @@ if [ "$DATASET" == "cifar10" ]; then
     N_SMP_CLS="9" K="3" MIR_CANDS=50
     CANDIDATE_SIZE=50 VAL_SIZE=5
     MODEL_NAME="resnet18" VAL_PERIOD=500 EVAL_PERIOD=100
-    BATCHSIZE=512; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
+    BATCHSIZE=16; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
 elif [ "$DATASET" == "cifar100" ]; then
     MEM_SIZE=2000

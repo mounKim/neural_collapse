@@ -2,7 +2,8 @@ import logging.config
 import os
 import random
 from collections import defaultdict
-
+import warnings
+warnings.filterwarnings('ignore')
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -30,7 +31,7 @@ def main():
     fileHandler.setFormatter(formatter)
     logger.addHandler(fileHandler)
 
-    # writer = SummaryWriter(f'tensorboard/{args.dataset}/{args.note}/seed_{args.rnd_seed}')
+    #writer = SummaryWriter(f'tensorboard/{args.dataset}/{args.note}/seed_{args.rnd_seed}')
 
     logger.info(args)
 
@@ -51,7 +52,6 @@ def main():
     train_datalist, cls_dict, cls_addition = get_train_datalist(args.dataset, args.sigma, args.repeat, args.init_cls, args.rnd_seed)
     test_datalist = get_test_datalist(args.dataset)
     samples_cnt = 0
-    
     # Reduce datalist in Debug mode
     if args.debug:
         random.shuffle(train_datalist)
@@ -60,9 +60,8 @@ def main():
         test_datalist = test_datalist[:2000]
 
     logger.info(f"Select a CIL method ({args.mode})")
-    print(len(train_datalist)) 
-    
     method = select_method(args, train_datalist, test_datalist, device)
+
     print("\n###flops###\n")
     #method.get_flops_parameter()
 

@@ -45,7 +45,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=7 python main_new.py --mode $MODE \
+    CUDA_VISIBLE_DEVICES=7 nohup python main.py --mode $MODE \
     --dataset $DATASET --n_smp_cls $N_SMP_CLS \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS\
     --rnd_seed $RND_SEED --k $K --aser_type $ASER_TYPE \

@@ -19,15 +19,15 @@ class ER(CLManagerBase):
             kwargs["temp_batchsize"] = kwargs["batchsize"]//2
         super().__init__(train_datalist, test_datalist, device, **kwargs)
 
-    def update_memory(self, sample):
-        self.reservoir_memory(sample)
+    def update_memory(self, sample, sample_num=None):
+        self.reservoir_memory(sample, sample_num)
 
-    def reservoir_memory(self, sample):
+    def reservoir_memory(self, sample, sample_num):
         self.seen += 1
         if len(self.memory.images) >= self.memory_size:
             j = np.random.randint(0, self.seen)
             if j < self.memory_size:
-                self.memory.replace_sample(sample, j)
+                self.memory.replace_sample(sample, j, sample_num=sample_num)
         else:
-            self.memory.replace_sample(sample)
+            self.memory.replace_sample(sample, sample_num=sample_num)
 

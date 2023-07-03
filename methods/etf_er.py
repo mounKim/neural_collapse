@@ -37,24 +37,27 @@ class ETF_ER(CLManagerBase):
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
         self.etf_initialize()
 
+
     def sample_inference(self, sample):
-        self.model.eval()
-        x = load_data(sample, self.data_dir, self.test_transform).unsqueeze(0)
-        y = self.cls_dict[sample['klass']]
-        x = x.to(self.device)
-        _, sample_feature = self.model(x, get_feature=True)
-        
-        if y not in self.feature_mean_dict.keys():
-            self.feature_mean_dict[y] = [sample_feature.detach()]
-        else:
-            self.feature_mean_dict[y].append(sample_feature.detach())
-            
-        if len(self.feature_mean_dict[y]) > self.cls_feature_length:
-            del self.feature_mean_dict[y][0]
-        stds = [torch.mean(torch.std(torch.stack(self.feature_mean_dict[key]), dim=0)).item() for key in self.feature_mean_dict.keys()]
-        self.feature_std_mean = np.clip(np.mean(stds) - 1/self.num_learned_class, 0, 1) * self.num_learned_class/(self.num_learned_class + 1)
-        self.feature_std_mean_list.append(self.feature_std_mean)
-        self.stds_list.append(np.mean(stds))
+        with torch.no_grad():
+            self.model.eval()
+            x = load_data(sample, self.data_dir, self.test_transform).unsqueeze(0)
+            #y = self.cls_dict[sample['klass']]
+            x = x.to(self.device)
+            _, sample_feature = self.model(x, get_feature=True)
+            '''
+            if y not in self.feature_mean_dict.keys():
+                self.feature_mean_dict[y] = [sample_feature.detach()]
+            else:
+                self.feature_mean_dict[y].append(sample_feature.detach())
+                
+            if len(self.feature_mean_dict[y]) > self.cls_feature_length:
+                del self.feature_mean_dict[y][0]
+            stds = [torch.mean(torch.std(torch.stack(self.feature_mean_dict[key]), dim=0)).item() for key in self.feature_mean_dict.keys()]
+            self.feature_std_mean = np.clip(np.mean(stds) - 1/self.num_learned_class, 0, 1) * self.num_learned_class/(self.num_learned_class + 1)
+            self.feature_std_mean_list.append(self.feature_std_mean)
+            self.stds_list.append(np.mean(stds))
+            '''
 
     def model_forward(self, x, y):
         #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
@@ -78,6 +81,7 @@ class ETF_ER(CLManagerBase):
         with torch.no_grad():
             cls_score = feature @ self.etf_vec
             acc, _ = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+            #acc, _ = self.compute_accuracy(cls_score[:, self.etf_index_list], y)
             acc = acc.item()
 
         return logit, loss, feature, acc
@@ -152,11 +156,18 @@ class ETF_ER(CLManagerBase):
     def update_memory(self, sample):
         self.reservoir_memory(sample)
 
+    def add_new_class(self, class_name, sample):
+        self.cls_dict[class_name] = len(self.exposed_classes)
+        self.exposed_classes.append(class_name)
+        self.num_learned_class = len(self.exposed_classes)
+        if 'reset' in self.sched_name:
+            self.update_schedule(reset=True)
+
     def online_step(self, sample, sample_num, n_worker):
         self.sample_num = sample_num
         if sample['klass'] not in self.exposed_classes:
-            self.add_new_class(sample['klass'])
-        self.sample_inference(sample)
+            self.add_new_class(sample['klass'], sample)
+        #self.sample_inference(sample)
         self.temp_batch.append(sample)
         self.num_updates += self.online_iter
         if len(self.temp_batch) >= self.temp_batch_size:
@@ -167,23 +178,24 @@ class ETF_ER(CLManagerBase):
             self.temp_batch = []
         
         # save feature and etf-fc
-        if self.sample_num % 100 == 0 and self.sample_num !=0:
-            fc_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_fc.pickle"
-            feature_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_feature.pickle"
-            class_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_class.pickle"
-            pickle_name_feature_std_mean_list = "etf_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_feature_std.pickle"
-            pickle_name_stds_list = "etf_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_stds.pickle"
+        if self.store_pickle and self.rnd_seed == 1:
+            if self.sample_num % 100 == 0 and self.sample_num !=0:
+                fc_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_fc.pickle"
+                feature_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_feature.pickle"
+                class_pickle_name = "etf_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_class.pickle"
+                pickle_name_feature_std_mean_list = "etf_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_feature_std.pickle"
+                pickle_name_stds_list = "etf_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_stds.pickle"
 
-            self.save_features(feature_pickle_name, class_pickle_name)
+                self.save_features(feature_pickle_name, class_pickle_name)
 
-            with open(fc_pickle_name, 'wb') as f:
-                pickle.dump(self.etf_vec[:, :len(self.memory.cls_list)].T, f, pickle.HIGHEST_PROTOCOL)
+                with open(fc_pickle_name, 'wb') as f:
+                    pickle.dump(self.etf_vec[:, :len(self.memory.cls_list)].T, f, pickle.HIGHEST_PROTOCOL)
 
-            with open(pickle_name_feature_std_mean_list, 'wb') as f:
-                pickle.dump(self.feature_std_mean_list, f, pickle.HIGHEST_PROTOCOL)
-            
-            with open(pickle_name_stds_list, 'wb') as f:
-                pickle.dump(self.stds_list, f, pickle.HIGHEST_PROTOCOL)
+                with open(pickle_name_feature_std_mean_list, 'wb') as f:
+                    pickle.dump(self.feature_std_mean_list, f, pickle.HIGHEST_PROTOCOL)
+                
+                with open(pickle_name_stds_list, 'wb') as f:
+                    pickle.dump(self.stds_list, f, pickle.HIGHEST_PROTOCOL)
 
     def reservoir_memory(self, sample):
         self.seen += 1

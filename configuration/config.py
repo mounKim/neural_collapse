@@ -21,7 +21,33 @@ def base_parser():
     # for ETF structure
     parser.add_argument("--num_eval_class", type=int, default=10, help="pre_train epoch")
     parser.add_argument("--num_class", type=int, default=10, help="pre_train epoch")
-
+    parser.add_argument("--store_pickle", action="store_true", help="store pickle for interpret")
+    parser.add_argument("--knn_top_k", type=int, default=10, help="")
+    parser.add_argument("--residual_num", type=int, default=20, help="")
+    parser.add_argument("--softmax_temperature", type=float, default=1, help="")
+    parser.add_argument("--selfsup_temp", type=float, default=0.07, help="")
+    parser.add_argument("--knn_sigma", type=float, default=1, help="")
+    parser.add_argument("--select_criterion", type=str, default="softmax", help="")
+    parser.add_argument("--loss_criterion", type=str, default="DR", help="")
+    parser.add_argument("--distill_coeff", type=float, default=0.999, help="")
+    parser.add_argument("--use_feature_distillation", action="store_true", help="")
+    parser.add_argument("--use_residual", action="store_true", help="")
+    parser.add_argument("--current_feature_num", type=int, default=20, help="")
+    parser.add_argument("--distill_beta", type=float, default=0.5, help="")
+    parser.add_argument("--distill_strategy", type=str, default="naive")
+    parser.add_argument("--distill_threshold", type=float, default=0.5)
+    parser.add_argument("--residual_strategy", type=str, default="")
+    parser.add_argument("--residual_num_threshold", type=int, default=10, help="")
+    parser.add_argument("--use_residual_warmup", action="store_true", help="")
+    parser.add_argument("--use_residual_unique", action="store_true", help="")
+    parser.add_argument("--use_modified_knn", action="store_true", help="")
+    parser.add_argument("--ood_strategy", type=str, default="cutmix")
+    parser.add_argument("--ood_num_samples", type=int, default=4)
+    parser.add_argument("--use_patch_permutation", action="store_true")
+    parser.add_argument("--use_synthetic_regularization", action="store_true")
+    parser.add_argument("--scl_coeff", type=float, default=0.1)
+    
+    
     # for baseline
     parser.add_argument("--recent_ratio", type=float, default=0.5, help="sampling ratio between recent and past")
     parser.add_argument("--cls_weight_decay", type=float, default=0.999)
@@ -41,12 +67,12 @@ def base_parser():
     parser.add_argument("--min_resize_threshold", type=int, default=16, help="")
     parser.add_argument("--resize_maps", type=int, choices=[0,1], default=0, help="")
 
-    # 얘네는 default가 없음
-    parser.add_argument("--lambda_diverse_loss", type=float, default=0.03, help="")
-    parser.add_argument("--lambda_fp_replay", type=float, default=1.5, help="")
-    parser.add_argument("--lambda_fp", type=float, default=0.3, help="")
+
+    parser.add_argument("--lambda_diverse_loss", default=0.3, type=float, help="")
+    parser.add_argument("--lambda_fp_replay", default=0.3, type=float, help="")
+    parser.add_argument("--lambda_fp", type=float, default=0.03, help="")
     parser.add_argument("--der_alpha", type=float, default=0.3, help="")
-    parser.add_argument("--der_beta", type=float, default=1.2, help="")
+    parser.add_argument("--der_beta", type=float, default=0.8, help="")
 
     parser.add_argument("--rnd_seed", type=int, help="Random seed number.")
     parser.add_argument(

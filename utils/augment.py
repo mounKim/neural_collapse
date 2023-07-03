@@ -19,6 +19,18 @@ from utils.my_augment import Kornia_Randaugment
 
 logger = logging.getLogger()
 
+import torchvision.transforms.functional as TF
+import random
+
+def my_segmentation_transforms(image, label, total_classes):
+    image_90 = TF.rotate(image, 90)
+    image_180 = TF.rotate(image, 180)
+    image_270 = TF.rotate(image, 270)
+    label_90 = label + total_classes
+    label_180 = label + 2 * total_classes
+    label_270 = label + 3 * total_classes
+    return torch.cat([image_90, image_180, image_270]), torch.Tensor([label_90.tolist() + label_180.tolist() + label_270.tolist()]).squeeze().long()
+
 
 class Preprocess(nn.Module):
     """Module to perform pre-process using Kornia on torch tensors."""
@@ -133,7 +145,13 @@ def get_transform(dataset, transform_list, transform_on_gpu=False):
         ]
     )
 
-    return train_transform, test_transform, cpu_transform, n_classes
+    test_gpu_transform = transforms.Compose(
+        [
+            transforms.Normalize(mean, std)
+        ]
+    )
+
+    return train_transform, test_transform, cpu_transform, test_gpu_transform, n_classes
 
 
 def select_autoaugment(dataset):

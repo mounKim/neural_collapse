@@ -37,7 +37,7 @@ class Accuracy(nn.Module):
         super().__init__()
         self.topk = topk
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, real_entered_num_class = None, real_num_class = None):
         """Forward function to calculate accuracy.
 
         Args:
@@ -47,7 +47,7 @@ class Accuracy(nn.Module):
         Returns:
             list[torch.Tensor]: The accuracies under different topk criterions.
         """
-        return accuracy(pred, target, self.topk)
+        return accuracy(pred, target, self.topk, real_entered_num_class = real_entered_num_class, real_num_class = real_num_class)
 
 class DataAugmentation(nn.Module):
 
@@ -189,6 +189,94 @@ def select_optimizer(opt_name, lr, model):
         opt.add_param_group({'params': model.fc.parameters()})
     return opt
 
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
+    It also supports the unsupervised contrastive loss in SimCLR"""
+    def __init__(self, temperature=0.07, contrast_mode='all',
+                 base_temperature=0.07):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+        self.contrast_mode = contrast_mode
+        self.base_temperature = base_temperature
+
+    def forward(self, features, labels=None, mask=None):
+        """Compute loss for model. If both `labels` and `mask` are None,
+        it degenerates to SimCLR unsupervised loss:
+        https://arxiv.org/pdf/2002.05709.pdf
+
+        Args:
+            features: hidden vector of shape [bsz, n_views, ...].
+            labels: ground truth of shape [bsz].
+            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
+                has the same class as sample i. Can be asymmetric.
+        Returns:
+            A loss scalar.
+        """
+        device = (torch.device('cuda')
+                  if features.is_cuda
+                  else torch.device('cpu'))
+
+        if len(features.shape) < 3:
+            raise ValueError('`features` needs to be [bsz, n_views, ...],'
+                             'at least 3 dimensions are required')
+        if len(features.shape) > 3:
+            features = features.view(features.shape[0], features.shape[1], -1)
+
+        batch_size = features.shape[0]
+        if labels is not None and mask is not None:
+            raise ValueError('Cannot define both `labels` and `mask`')
+        elif labels is None and mask is None:
+            mask = torch.eye(batch_size, dtype=torch.float32).to(device)
+        elif labels is not None:
+            labels = labels.contiguous().view(-1, 1)
+            if labels.shape[0] != batch_size:
+                raise ValueError('Num of labels does not match num of features')
+            mask = torch.eq(labels, labels.T).float().to(device)
+        else:
+            mask = mask.float().to(device)
+
+        contrast_count = features.shape[1]
+        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+        if self.contrast_mode == 'one':
+            anchor_feature = features[:, 0]
+            anchor_count = 1
+        elif self.contrast_mode == 'all':
+            anchor_feature = contrast_feature
+            anchor_count = contrast_count
+        else:
+            raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
+
+        # compute logits
+        anchor_dot_contrast = torch.div(
+            torch.matmul(anchor_feature, contrast_feature.T),
+            self.temperature)
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
+
+        # tile mask
+        mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).to(device),
+            0
+        )
+        mask = mask * logits_mask
+
+        # compute log_prob
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        loss = loss.view(anchor_count, batch_size).mean()
+
+        return loss
 
 class DR_loss(nn.Module):
     def __init__(self,
@@ -206,6 +294,8 @@ class DR_loss(nn.Module):
             self,
             feat,
             target,
+            pure_num=None,
+            augmented_num=None,
             h_norm2=None,
             m_norm2=None,
             avg_factor=None,
@@ -216,10 +306,54 @@ class DR_loss(nn.Module):
             h_norm2 = torch.ones_like(dot)
         if m_norm2 is None:
             m_norm2 = torch.ones_like(dot)
-
-        loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
+        
+        if self.reduction == "mean":
+            if augmented_num is None:
+                loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
+            else:
+                loss = ((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2
+                loss = 0.5 * ((torch.mean(loss[:pure_num]) + torch.mean(loss[pure_num:])) / 2)
+                
+        elif self.reduction == "none":
+            loss = 0.5 * (((dot - (m_norm2 * h_norm2)) ** 2) / h_norm2)
 
         return loss * self.loss_weight
+
+class DR_Reverse_loss(nn.Module):
+    def __init__(self,
+                 reduction='mean',
+                 loss_weight=0.01,
+                 reg_lambda=0.
+                 ):
+        super().__init__()
+
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.reg_lambda = reg_lambda
+
+    def forward(
+            self,
+            feat,
+            targets,
+            num_classes,
+            h_norm2=None,
+            m_norm2=None,
+            avg_factor=None,
+    ):
+        assert avg_factor is None
+        #dot = torch.sum(feat * targets, dim=1)
+        dot = torch.sum(feat @ targets.T, dim=1)
+        if h_norm2 is None:
+            h_norm2 = torch.ones_like(dot)
+        if m_norm2 is None:
+            m_norm2 = torch.ones_like(dot)
+        
+        if self.reduction == "mean":
+            loss = 0.5 * torch.mean((dot ** 2) / h_norm2)
+        elif self.reduction == "none":
+            loss = 0.5 * (((dot) ** 2) / h_norm2)
+
+        return loss * self.loss_weight * (1 / num_classes)
 
 def accuracy_numpy(pred, target, topk=(1, ), thrs=0.):
     if isinstance(thrs, Number):
@@ -258,7 +392,7 @@ def accuracy_numpy(pred, target, topk=(1, ), thrs=0.):
     return res
 
 
-def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
+def accuracy_torch(pred, target, topk=(1, ), thrs=0., real_entered_num_class=None, real_num_class=None):
     if isinstance(thrs, Number):
         thrs = (thrs, )
         res_single = True
@@ -267,13 +401,27 @@ def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
     else:
         raise TypeError(
             f'thrs should be a number or tuple, but got {type(thrs)}.')
-
+    if real_entered_num_class is not None:
+        inf_index = []
+        for i in range(4):
+            #inf_index += list(range(i * real_num_class, i * real_num_class + real_entered_num_class))
+            inf_index += list(range(i * real_num_class + real_entered_num_class, min((i+1) * real_num_class, pred.shape[1])))
+        pred[:, inf_index] = float('-inf')
+        
     res = []
     maxk = max(topk)
     num = pred.size(0)
     pred = pred.float()
     pred_score, pred_label = pred.topk(maxk, dim=1)
     pred_label = pred_label.t()
+
+    '''
+    print("target")
+    print(target.view(1, -1).expand_as(pred_label))
+    print("pred_label")
+    print(pred_label)
+    '''
+    
     correct = pred_label.eq(target.view(1, -1).expand_as(pred_label))
     for k in topk:
         res_thr = []
@@ -290,7 +438,7 @@ def accuracy_torch(pred, target, topk=(1, ), thrs=0.):
     return res, correct_count
 
 
-def accuracy(pred, target, topk=1, thrs=0.):
+def accuracy(pred, target, topk=1, thrs=0., real_entered_num_class = None, real_num_class = None):
     """Calculate accuracy according to the prediction and target.
 
     Args:
@@ -329,7 +477,7 @@ def accuracy(pred, target, topk=1, thrs=0.):
     pred = to_tensor(pred)
     target = to_tensor(target)
 
-    res, correct_count = accuracy_torch(pred, target, topk, thrs)
+    res, correct_count = accuracy_torch(pred, target, topk, thrs, real_entered_num_class, real_num_class)
     return (res[0], correct_count) if return_single else (res, correct_count)
 
 '''
@@ -529,7 +677,7 @@ def get_data_loader(opt_dict, dataset, pre_train=False):
     train_datalist, cls_dict, cls_addition = get_train_datalist(dataset, opt_dict["sigma"], opt_dict["repeat"], opt_dict["init_cls"], opt_dict["rnd_seed"])
 
     # for debugging!
-    train_datalist = train_datalist[:2000]
+    # train_datalist = train_datalist[:2000]
 
     exp_train_df = pd.DataFrame(train_datalist)
     exp_test_df = pd.DataFrame(test_datalist)
@@ -543,7 +691,6 @@ def get_data_loader(opt_dict, dataset, pre_train=False):
         #cls_list=exposed_classes, #cls_list none이면 알아서 label로 train
         data_dir=opt_dict["data_dir"]
     )
-    
     train_loader = DataLoader(
         train_dataset,
         shuffle=True,

@@ -11,12 +11,13 @@ import pickle5 as pickle
 from utils.data_loader import ImageDataset, cutmix_data, MultiProcessLoader, get_statistics
 import math
 import utils.train_utils 
+import os
 from utils.data_worker import load_data
 from utils.train_utils import select_optimizer, select_model, select_scheduler
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
 
-class ETF_ER_RESMEM(CLManagerBase):
+class ETF_ER_RESMEM_VER2(CLManagerBase):
     def __init__(self,  train_datalist, test_datalist, device, **kwargs):
         if kwargs["temp_batchsize"] is None:
             kwargs["temp_batchsize"] = kwargs["batchsize"]//2
@@ -28,11 +29,28 @@ class ETF_ER_RESMEM(CLManagerBase):
         self.eval_classes = 0 #kwargs["num_eval_class"]
         self.cls_feature_length = 50
         self.feature_mean_dict = {}
+        self.current_cls_feature_dict = {}
         self.feature_std_mean_list = []
+        self.current_feature_num = kwargs["current_feature_num"]
         self.residual_num = kwargs["residual_num"]
+        self.distill_beta = kwargs["distill_beta"]
+        self.distill_strategy = kwargs["distill_strategy"]
+        self.distill_threshold = kwargs["distill_threshold"]
+
         self.stds_list = []
         self.softmax = nn.Softmax(dim=0).to(self.device)
-        self.criterion = DR_loss().to(self.device)
+        self.use_feature_distillation = kwargs["use_feature_distillation"]
+        if self.loss_criterion == "DR":
+            if self.use_feature_distillation:
+                self.criterion = DR_loss(reduction="none").to(self.device)
+            else:
+                self.criterion = DR_loss().to(self.device)
+        elif self.loss_criterion == "CE":
+            if self.use_feature_distillation:
+                self.criterion = nn.CrossEntropyLoss(reduction="none").to(self.device)
+            else:
+                self.criterion = nn.CrossEntropyLoss(reduction="mean").to(self.device)
+
         self.compute_accuracy = Accuracy(topk=self.topk)
         self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False).to(self.device)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
@@ -40,28 +58,40 @@ class ETF_ER_RESMEM(CLManagerBase):
         self.etf_initialize()
         self.residual_dict = {}
         self.feature_dict = {}
+        self.cls_feature_dict = {}
+        self.note = kwargs["note"]
+        os.makedirs(f"{self.note}", exist_ok=True)
 
-    def sample_inference(self, sample):
+    def get_cos_sim(self, a, b):
+        inner_product = (a * b).sum(dim=1)
+        a_norm = a.pow(2).sum(dim=1).pow(0.5)
+        b_norm = b.pow(2).sum(dim=1).pow(0.5)
+        cos = inner_product / (a_norm * b_norm)
+        return cos
+
+    def sample_inference(self, samples):
         with torch.no_grad():
             self.model.eval()
-            x = load_data(sample, self.data_dir, self.test_transform).unsqueeze(0)
-            #y = self.cls_dict[sample['klass']]
-            x = x.to(self.device)
-            _, sample_feature = self.model(x, get_feature=True)
+            batch_labels = []
+            batch_feature_dict = {}
+            for sample in samples:
+                x = load_data(sample, self.data_dir, self.test_transform).unsqueeze(0)
+                y = self.cls_dict[sample['klass']]
+                batch_labels.append(y)
+                x = x.to(self.device)
+                _, sample_feature = self.model(x, get_feature=True)
 
-            '''
-            if y not in self.feature_mean_dict.keys():
-                self.feature_mean_dict[y] = [sample_feature.detach()]
-            else:
-                self.feature_mean_dict[y].append(sample_feature.detach())
-                
-            if len(self.feature_mean_dict[y]) > self.cls_feature_length:
-                del self.feature_mean_dict[y][0]
-            stds = [torch.mean(torch.std(torch.stack(self.feature_mean_dict[key]), dim=0)).item() for key in self.feature_mean_dict.keys()]
-            self.feature_std_mean = np.clip(np.mean(stds) - 1/self.num_learned_class, 0, 1) * self.num_learned_class/(self.num_learned_class + 1)
-            self.feature_std_mean_list.append(self.feature_std_mean)
-            self.stds_list.append(np.mean(stds))
-            '''
+                if y not in batch_feature_dict.keys():
+                    batch_feature_dict[y] = [sample_feature]
+                else:
+                    batch_feature_dict[y].append(sample_feature)
+
+            for y in list(set(batch_labels)):
+                if y not in self.cls_feature_dict.keys():
+                    self.cls_feature_dict[y] = torch.mean(torch.stack(batch_feature_dict[y]), dim=0)
+                else:
+                    self.cls_feature_dict[y] = self.distill_coeff * self.cls_feature_dict[y] + (1-self.distill_coeff) * torch.mean(torch.stack(batch_feature_dict[y]), dim=0)
+
 
     def model_forward(self, x, y):
         #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
@@ -79,8 +109,69 @@ class ETF_ER_RESMEM(CLManagerBase):
             with torch.cuda.amp.autocast(self.use_amp):
                 logit, feature = self.model(x, get_feature=True)
                 feature = self.pre_logits(feature)
-                loss = self.criterion(feature, target)
-                residual = (target - feature).detach().cpu()
+
+                # calcualte current feature
+                for idx, y_i in enumerate(y):
+                    if y_i not in self.current_cls_feature_dict.keys():
+                        self.current_cls_feature_dict[y_i.item()] = [feature[idx].detach().cpu()]
+                    else:
+                        self.current_cls_feature_dict[y_i.item()].append(feature[idx].detach().cpu())
+
+                # check over storing
+                for y_i in torch.unique(y):
+                    if len(self.current_cls_feature_dict[y_i.item()]) >= self.current_feature_num:
+                        self.current_cls_feature_dict[y_i.item()] = self.current_cls_feature_dict[y_i][-self.current_cls_feature_num:]
+
+                if self.loss_criterion == "DR":
+                    loss = self.criterion(feature, target)
+                    residual = (target - feature).detach().cpu()
+                elif self.loss_criterion == "CE":
+                    loss = self.criterion(logit, y)
+                    residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach().cpu()
+                elif self.loss_criterion == "DR_ANGLE":
+                    loss = self.criterion(logit, y)
+                    cos_theta = (target * feature) / torch.norm(target * feature, p=2, dim=1, keepdim=True)
+
+                if self.use_feature_distillation:
+                    past_feature = torch.stack([self.pre_logits(self.cls_feature_dict[y_i.item()]) for y_i in y], dim=0)
+                    target_fc = torch.stack([self.etf_vec[:, y_i.item()] for y_i in y], dim=0)
+                    l2_loss = ((feature - past_feature.detach().squeeze()) ** 2).sum(dim=1)
+                    # naive distllation
+                    if self.distill_strategy == "naive":
+                        print("loss", loss.mean(), "l2_loss", self.distill_beta * l2_loss.mean())
+                        loss = (loss + self.distill_beta * l2_loss).mean()
+
+                    # similarity based distillation
+                    elif self.distill_strategy == "classwise":
+                        past_cos_sim = torch.abs(self.get_cos_sim(target_fc, past_feature.detach().squeeze()))
+                        past_cos_sim -= self.distill_threshold
+                        beta_masking = torch.clamp(past_cos_sim, min=0.0, max=1.0)
+                        print("y")
+                        print(y)
+                        print("beta_masking")
+                        print(beta_masking)
+                        print("loss", loss.mean(), "l2_loss", (self.distill_beta * beta_masking * l2_loss).mean())
+                        loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
+                    
+                    elif self.distill_strategy == "classwise_difference":
+                        current_feature = torch.stack([self.pre_logits(torch.mean(torch.stack(self.current_cls_feature_dict[y_i.item()], dim=0), dim=0).unsqueeze(0)) for y_i in y], dim=0)
+                        past_cos_sim = self.get_cos_sim(target_fc, past_feature.detach().squeeze())
+                        current_cos_sim = self.get_cos_sim(target_fc, current_feature.squeeze().to(self.device))
+                        masking = torch.abs(past_cos_sim) > torch.abs(current_cos_sim)
+                        beta_masking = torch.abs(past_cos_sim)
+                        beta_masking -= self.distill_threshold
+                        beta_masking = torch.clamp(beta_masking, min=0.0, max=1.0)
+                        beta_masking = masking * beta_masking
+                        
+                        #sim_difference = torch.abs(past_cos_sim - current_cos_sim)
+                        #sim_difference -= self.distill_threshold
+                        #beta_masking = torch.clamp(sim_difference, min=0.0, max=1.0)
+                        print("y")
+                        print(y)
+                        print("beta_masking")
+                        print(beta_masking)
+                        print("loss", loss.mean(), "l2_loss", (self.distill_beta * beta_masking * l2_loss).mean())
+                        loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
                 
                 # residual dict update
                 for idx, t in enumerate(y):
@@ -95,15 +186,18 @@ class ETF_ER_RESMEM(CLManagerBase):
                         self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
                         self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
 
-
         # accuracy calculation
-        with torch.no_grad():
-            cls_score = feature @ self.etf_vec
-            acc, _ = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
-            #acc, _ = self.compute_accuracy(cls_score[:, self.etf_index_list], y)
-            acc = acc.item()
+        if self.loss_criterion == "DR":
+            with torch.no_grad():
+                cls_score = feature @ self.etf_vec
+                acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                #acc, _ = self.compute_accuracy(cls_score[:, self.etf_index_list], y)
+                acc = acc.item()
+        elif self.loss_criterion == "CE":
+            _, preds = logit.topk(self.topk, 1, True, True)
+            correct = torch.sum(preds == y.unsqueeze(1)).item()
 
-        return logit, loss, feature, acc
+        return logit, loss, feature, correct
 
     def pre_logits(self, x):
         x = x / torch.norm(x, p=2, dim=1, keepdim=True)
@@ -123,7 +217,7 @@ class ETF_ER_RESMEM(CLManagerBase):
             self.optimizer.zero_grad()
 
             # logit can not be used anymore
-            _, loss, feature, acc = self.model_forward(x,y)
+            _, loss, feature, correct_batch = self.model_forward(x,y)
 
             if self.use_amp:
                 self.scaler.scale(loss).backward()
@@ -136,9 +230,10 @@ class ETF_ER_RESMEM(CLManagerBase):
             self.after_model_update()
 
             total_loss += loss.item()
-        num_data += y.size(0)
+            correct += correct_batch
+            num_data += y.size(0)
 
-        return total_loss / iterations, acc #, correct / num_data
+        return total_loss / iterations, correct / num_data
         
     def etf_initialize(self):
         logger.info("ETF head : evaluating {} out of {} classes.".format(self.eval_classes, self.num_classes))
@@ -148,12 +243,6 @@ class ETF_ER_RESMEM(CLManagerBase):
         one_nc_nc: torch.Tensor = torch.mul(torch.ones(self.num_classes, self.num_classes), (1 / self.num_classes))
         self.etf_vec = torch.mul(torch.matmul(orth_vec, i_nc_nc - one_nc_nc),
                             math.sqrt(self.num_classes / (self.num_classes - 1))).to(self.device)
-        '''
-        print("etf shape")
-        print(self.etf_vec.shape)
-        print("etf angle")
-        print(self.get_angle(self.etf_vec[:,0],self.etf_vec[:,1]), self.get_angle(self.etf_vec[:,0],self.etf_vec[:,-1]))
-        '''
 
     def get_angle(self, a, b):
         inner_product = (a * b).sum(dim=0)
@@ -186,11 +275,11 @@ class ETF_ER_RESMEM(CLManagerBase):
         self.sample_num = sample_num
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'], sample)
-        #self.sample_inference(sample)
         self.temp_batch.append(sample)
         self.num_updates += self.online_iter
         if len(self.temp_batch) >= self.temp_batch_size:
             if int(self.num_updates) > 0:
+                self.sample_inference(self.temp_batch)
                 train_loss, train_acc = self.online_train(iterations=int(self.num_updates))
                 self.report_training(sample_num, train_loss, train_acc)
                 self.num_updates -= int(self.num_updates)
@@ -198,13 +287,14 @@ class ETF_ER_RESMEM(CLManagerBase):
         
         # save feature and etf-fc
         if self.store_pickle and self.rnd_seed == 1:
-
             if self.sample_num % 100 == 0 and self.sample_num !=0:
-                fc_pickle_name = "etf_resmem_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_fc.pickle"
-                feature_pickle_name = "etf_resmem_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_feature.pickle"
-                class_pickle_name = "etf_resmem_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_class.pickle"
-                pickle_name_feature_std_mean_list = "etf_remem_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_feature_std.pickle"
-                pickle_name_stds_list = "etf_resmem_sigma" + str(self.sigma) + "_num_" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_stds.pickle"
+
+                name_prefix = self.note + "/etf_resmem_sigma" + str(self.sigma) + "_num_" + str(self.sample_num) + "_iter" + str(self.online_iter) + "_sigma" + str(self.softmax_temperature) + "_criterion_" + self.select_criterion + "_top_k" + str(self.knn_top_k) + "_knn_sigma"+ str(self.knn_sigma)
+                fc_pickle_name = name_prefix + "_fc.pickle"
+                feature_pickle_name = name_prefix + "_feature.pickle"
+                class_pickle_name = name_prefix + "_class.pickle"
+                pickle_name_feature_std_mean_list = name_prefix + "_feature_std.pickle"
+                pickle_name_stds_list = name_prefix + "_stds.pickle"
 
                 self.save_features(feature_pickle_name, class_pickle_name)
 
@@ -283,7 +373,13 @@ class ETF_ER_RESMEM(CLManagerBase):
                 y = data["label"]
                 x = x.to(self.device)
                 y = y.to(self.device)
-                res, features = self.simple_test(x, y, return_feature=True)
+
+                if self.loss_criterion == "DR":
+                    res, features = self.simple_test(x, y, return_feature=True)
+
+                elif self.loss_criterion == "CE":
+                    logit, features = self.model(x, get_feature=True)
+
                 features = self.pre_logits(features)
 
                 # |z-z(i)|**2
@@ -294,26 +390,13 @@ class ETF_ER_RESMEM(CLManagerBase):
 
                 # top_k w_i 
                 if self.select_criterion == "softmax":
-                    w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.softmax_temperature) for w_i_list in w_i_lists]
+                    w_i_lists = [self.softmax(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / self.knn_sigma) for w_i_list in w_i_lists]
                 elif self.select_criterion == "linear": # just weight sum
                     w_i_lists = [torch.topk(w_i_list.squeeze(), self.knn_top_k)[0] / torch.sum(torch.topk(w_i_list.squeeze(), self.knn_top_k)[0]).item() for w_i_list in w_i_lists]
 
                 # select top_k residuals
                 residual_lists = [residual_list[w_i_index] for w_i_index in w_i_indexs]
-
-                # residual term
-                '''
-                print("residual_lists[0]")
-                print(residual_lists[0].shape)
-                print("w_i_lists[0]")
-                print(w_i_lists[0].shape)
-                '''
                 residual_terms = [rs_list.T @ w_i_list  for rs_list, w_i_list in zip(residual_lists, w_i_lists)]
-                
-                # Add residual terms to ETF head
-                print("torch.stack(residual_terms)", torch.stack(residual_terms).shape)
-                print("features.shape", features.shape)
-                features += torch.stack(residual_terms).to(self.device)
 
                 unique_y = torch.unique(y).tolist()
                 for u_y in unique_y:
@@ -323,29 +406,34 @@ class ETF_ER_RESMEM(CLManagerBase):
                     else:
                         feature_dict[u_y].append(torch.index_select(features, 0, indices))
 
-                #print("features", features.shape)
-                #print("y", y.shape)
-                target = self.etf_vec[:, y].t()
-                loss = self.criterion(features, target)
+
+                if self.loss_criterion == "DR":
+                    # Add residual terms to ETF head
+                    features += torch.stack(residual_terms).to(self.device)
+                    target = self.etf_vec[:, y].t()
+                    loss = self.criterion(features, target)
+
+                elif self.loss_criterion == "CE":
+                    logit = self.softmax(logit / self.softmax_temperature) + torch.stack(residual_terms).to(self.device)
+                    loss = criterion(logit, y)
+
+                if self.use_feature_distillation:
+                    loss = loss.mean()
 
                 # accuracy calculation
                 with torch.no_grad():
-                    cls_score = features @ self.etf_vec
-                    #_, correct_count = self.compute_accuracy(cls_score[:, :self.eval_classes], y)
-                    _, correct_count = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                    if self.loss_criterion == "DR":
+                        cls_score = features @ self.etf_vec
+                        _, correct_count = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                        total_correct += correct_count
 
-                    total_correct += correct_count
-                    total_num_data += y.size(0)
-                    '''
-                    total_correct += torch.sum(preds == y.unsqueeze(1)).item()
-                    total_num_data += y.size(0)
+                    elif self.loss_criterion == "CE":
+                        _, preds = logit.topk(self.topk, 1, True, True)
+                        total_correct += torch.sum(preds == y.unsqueeze(1)).item()
 
-                    xlabel_cnt, correct_xlabel_cnt = self._interpret_pred(y, pred)
-                    correct_l += correct_xlabel_cnt.detach().cpu()
-                    num_data_l += xlabel_cnt.detach().cpu()
-                    '''
                     total_loss += loss.item()
-                
+                    total_num_data += y.size(0)
+
         avg_acc = total_correct / total_num_data
         avg_loss = total_loss / len(test_loader)
         #cls_acc = (correct_l / (num_data_l + 1e-5)).numpy().tolist()

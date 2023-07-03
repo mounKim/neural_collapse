@@ -18,7 +18,6 @@ from kornia import image_to_tensor, tensor_to_image
 from kornia.geometry.transform import resize
 from utils.augmentations import CustomRandomCrop, CustomRandomHorizontalFlip, DoubleCompose, DoubleTransform
 import torch.multiprocessing as multiprocessing
-from tqdm import tqdm
 
 from utils.augment import DataAugmentation, Preprocess, get_statistics
 
@@ -28,7 +27,7 @@ logger = logging.getLogger()
 
 
 class MultiProcessLoader():
-    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True):
+    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True, test_transform=None):
         self.n_workers = n_workers
         self.cls_dict = cls_dict
         self.transform = transform
@@ -40,12 +39,22 @@ class MultiProcessLoader():
         self.result_queues = []
         self.workers = []
         self.index_queues = []
+        self.test_transform = test_transform
         for i in range(self.n_workers):
             index_queue = multiprocessing.Queue()
             index_queue.cancel_join_thread()
             result_queue = multiprocessing.Queue()
             result_queue.cancel_join_thread()
-            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            '''
+            if test_transform is not None:
+                w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            else:
+            '''
+            #w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, None, True, self.cpu_transform, self.device, use_kornia, transform_on_worker))
+            if self.test_transform is not None:
+                print("self.test_transform")
+                print(self.test_transform)
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker, self.test_transform))
             w.daemon = True
             w.start()
             self.workers.append(w)
@@ -64,20 +73,63 @@ class MultiProcessLoader():
 
     def add_new_class(self, cls_dict):
         self.cls_dict = cls_dict
-    def load_batch(self, batch, cls_dict):
+
+    def load_batch(self, batch, cls_dict, batch_idx):
+
         self.cls_dict = cls_dict
-        for sample in batch:
+        for idx, sample in enumerate(batch):
             sample["label"] = self.cls_dict[sample["klass"]]
+            sample["sample_num"] = batch_idx[idx]
+            
         for i in range(self.n_workers):
             self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
+
+
+    @torch.no_grad()
+    def get_two_batches(self):
+        data_1 = dict()
+        data_2 = dict()
+        images = []
+        test_images = []
+        labels = []
+        sample_nums = []
+
+        for i in range(self.n_workers):
+            loaded_samples = self.result_queues[i].get(timeout=300.0)
+            if loaded_samples is not None:
+                images.append(loaded_samples["image"])
+                test_images.append(loaded_samples["test_image"])
+                labels.append(loaded_samples["label"])
+                sample_nums.append(loaded_samples["sample_num"])
+
+        if len(images) > 0:
+            images = torch.cat(images)
+            test_images = torch.cat(test_images)
+            labels = torch.cat(labels)
+            sample_nums = torch.cat(sample_nums)
+
+            data_1['image'] = images
+            data_1['label'] = labels
+            data_1['sample_nums'] = sample_nums
+
+            data_2['image'] = test_images
+            data_2['label'] = labels
+            data_2['sample_nums'] = sample_nums
+
+            return data_1, data_2
+        else:
+            return None
 
     @torch.no_grad()
     def get_batch(self):
         data = dict()
         images = []
         labels = []
+        sample_nums = []
+    
         # for twf
         task_ids = []
+        
         for i in range(self.n_workers):
             loaded_samples = self.result_queues[i].get(timeout=300.0)
             if loaded_samples is not None:
@@ -85,9 +137,11 @@ class MultiProcessLoader():
                 labels.append(loaded_samples["label"])
                 if "task_id" in loaded_samples.keys():
                     task_ids.append(loaded_samples["task_id"])
+                sample_nums.append(loaded_samples["sample_num"])
         if len(images) > 0:
             images = torch.cat(images)
             labels = torch.cat(labels)
+            sample_nums = torch.cat(sample_nums)
             if task_ids:
                 task_ids = torch.cat(task_ids)
             if self.transform_on_gpu and not self.transform_on_worker:
@@ -95,6 +149,7 @@ class MultiProcessLoader():
             data['image'] = images
             data['label'] = labels
             data['task_id'] = task_ids
+            data['sample_nums'] = sample_nums
             return data
         else:
             return None
@@ -117,8 +172,8 @@ def get_custom_double_transform(transform):
         else:
             tfs.append(DoubleTransform(tf))
 
-def partial_distill_loss(model, net_partial_features: list, pret_partial_features: list, targets,
-                         task_ids, device, teacher_forcing: list = None, extern_attention_maps: list = None):
+def partial_distill_loss(model, net_partial_features: list, pret_partial_features: list,
+                         targets, device, teacher_forcing: list = None, extern_attention_maps: list = None):
 
     assert len(net_partial_features) == len(
         pret_partial_features), f"{len(net_partial_features)} - {len(pret_partial_features)}"
@@ -135,7 +190,9 @@ def partial_distill_loss(model, net_partial_features: list, pret_partial_feature
 
         adapter = getattr(
             model, f"adapter_{i+1}")
+
         pret_feat = pret_feat.detach()
+
         if teacher_forcing is None:
             curr_teacher_forcing = torch.zeros(
                 len(net_feat,)).bool().to(device)
@@ -145,7 +202,8 @@ def partial_distill_loss(model, net_partial_features: list, pret_partial_feature
             curr_teacher_forcing = teacher_forcing
             curr_ext_attention_map = torch.stack(
                 [b[i] for b in extern_attention_maps], dim=0).float()
-        adapt_loss, adapt_attention = adapter(net_feat, pret_feat, targets, task_ids,
+
+        adapt_loss, adapt_attention = adapter(net_feat, pret_feat, targets,
                                               teacher_forcing=curr_teacher_forcing, attention_map=curr_ext_attention_map)
 
         loss += adapt_loss
@@ -177,7 +235,6 @@ class ImageDataset(Dataset):
         self.data_dir = data_dir
         self.preload = preload
         self.device = device
-        print(f"Preload: {self.data_frame}")
         self.transform_on_gpu = transform_on_gpu
         if self.preload:
             mean, std, n_classes, inp_size, _ = get_statistics(dataset=self.dataset)
@@ -190,8 +247,7 @@ class ImageDataset(Dataset):
                     ])
                 self.transform_gpu = self.transform
             self.loaded_images = []
-            ct = 0
-            for idx in tqdm(range(len(self.data_frame))):
+            for idx in range(len(self.data_frame)):
                 sample = dict()
                 try:
                     img_name = self.data_frame.iloc[idx]["file_name"]
@@ -216,7 +272,6 @@ class ImageDataset(Dataset):
                 sample["label"] = label
                 sample["image_name"] = img_name
                 self.loaded_images.append(sample)
-                
 
     def __len__(self):
         return len(self.data_frame)
@@ -1757,6 +1812,50 @@ def get_statistics(dataset: str):
         in_channels[dataset],
     )
 
+def generate_masking(x, device, patch_size=2):
+    '''
+    past => well distinguised
+    past and novel => not well distinguised
+    novel => terrible
+    
+    this generate new class using exposed_classes[-1] and exposed_classes[-2]
+    
+    return) index1, mask
+    '''
+    c, w, h = x.shape
+    x_patched = (c, w//patch_size, h//patch_size)
+    rand = torch.randn_like(x_patched).to(device)
+    index = [torch.randperm(c*w*h).reshape_as(x).to(device) for _ in range(c)]
+    mask = rand > 0
+    return index, mask
+    
+def generate_new_data(x, y, index, mask, patch_size, device, alpha=1.0):
+    
+    channel = x.shape[0]
+    patch_len = x.shape[1] // patch_size
+    
+    new_x = x.clone().to(device)
+    new_y = y.clone().to(device)
+    
+    # index대로 patch 순서 섞기
+    for c in range(channel):
+        for i in index[c]:
+            x_c = i//patch_len
+            y_c = i%patch_len
+            new_x[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size] = x[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size]
+            new_y[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size] = y[c, x_c*patch_size:(x_c+1)*patch_size, y_c*patch_size:(y_c+1)*patch_size]
+
+    # mask 부분만 swap
+    for c in range(channel):
+        for i in range(patch_len):
+            for j in range(patch_len):
+                if mask[c][i][j] == 0:
+                    continue
+                temp = new_x[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
+                new_x[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size] = new_y[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
+                new_y[c, i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size] = temp
+    
+    return new_x, new_y
 
 # from https://github.com/drimpossible/GDumb/blob/74a5e814afd89b19476cd0ea4287d09a7df3c7a8/src/utils.py#L102:5
 def cutmix_data(x, y, alpha=1.0, cutmix_prob=0.5, z=None):

@@ -63,7 +63,7 @@ def main():
     method = select_method(args, train_datalist, test_datalist, device)
 
     print("\n###flops###\n")
-    method.get_flops_parameter()
+    #method.get_flops_parameter()
 
     eval_results = defaultdict(list)
 
@@ -78,7 +78,7 @@ def main():
 
     # memory에서 data 뽑아서 학습
     for i, data in enumerate(train_datalist):
-        method.online_step(i+1, args.n_worker)
+        method.online_step(args.n_worker)
         if i % args.eval_period == 0:
             eval_dict = method.online_evaluate(test_datalist, samples_cnt, 512, args.n_worker, cls_dict,
                                                cls_addition, data["time"])

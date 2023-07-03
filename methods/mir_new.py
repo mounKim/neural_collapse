@@ -73,6 +73,12 @@ class MIR(ER):
         self.future_sample_num += 1
         return 0
 
+    # stream data만 뽑으면 됨 => memory data는 candidate 중에서 select
+    def generate_waiting_batch(self, iterations):
+        for i in range(iterations):
+            self.waiting_batch.append(self.temp_future_batch)
+            self.waiting_batch_idx.append(self.temp_future_batch_idx)
+
     def generate_candidate_batch(self, iterations):
         for i in range(iterations):
             candidate_batch, candidate_batch_idx = self.memory.retrieval(self.cand_size)
@@ -173,7 +179,6 @@ class MIR(ER):
                 x = torch.cat([x, mem_x])
                 y = torch.cat([y, mem_y])
                 sample_nums = torch.cat([sample_nums, mem_sample_nums])
-
 
             self.optimizer.zero_grad()
             logit, loss = self.model_forward(x, y, sample_nums)

@@ -182,25 +182,25 @@ class TWF(ER):
         self.cls_dict[class_name] = len(self.exposed_classes)
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)
-        prev_weight = copy.deepcopy(self.model.fc.weight.data)
-        prev_bias = copy.deepcopy(self.model.fc.bias.data)
-        # pret_prev_weight = copy.deepcopy(self.model.fc.weight.data)
-        # pret_prev_bias = copy.deepcopy(self.model.fc.bias.data)
-        self.model.fc = nn.Linear(self.model.fc.in_features, self.num_learned_class).to(self.device)
-        # self.pretrained_model.fc = nn.Linear(self.model.fc.in_features, self.num_learned_class).to(self.device)
-        with torch.no_grad():
-            if self.num_learned_class > 1:
-                self.model.fc.weight[:self.num_learned_class - 1] = prev_weight
-                self.model.fc.bias[:self.num_learned_class - 1] = prev_bias
+        # prev_weight = copy.deepcopy(self.model.fc.weight.data)
+        # prev_bias = copy.deepcopy(self.model.fc.bias.data)
+        # # pret_prev_weight = copy.deepcopy(self.model.fc.weight.data)
+        # # pret_prev_bias = copy.deepcopy(self.model.fc.bias.data)
+        # self.model.fc = nn.Linear(self.model.fc.in_features, self.num_learned_class).to(self.device)
+        # # self.pretrained_model.fc = nn.Linear(self.model.fc.in_features, self.num_learned_class).to(self.device)
+        # with torch.no_grad():
+        #     if self.num_learned_class > 1:
+        #         self.model.fc.weight[:self.num_learned_class - 1] = prev_weight
+        #         self.model.fc.bias[:self.num_learned_class - 1] = prev_bias
                 # self.pretrained_model.fc.weight[:self.num_learned_class - 1] = pret_prev_weight
                 # self.pretrained_model.fc.bias[:self.num_learned_class - 1] = pret_prev_bias
-        for param in self.optimizer.param_groups[1]['params']:
-            if param in self.optimizer.state.keys():
-                del self.optimizer.state[param]
+        # for param in self.optimizer.param_groups[1]['params']:
+        #     if param in self.optimizer.state.keys():
+        #         del self.optimizer.state[param]
         del self.optimizer.param_groups[1]
         self.optimizer.add_param_group({'params': self.model.fc.parameters()})
-        if 'reset' in self.sched_name:
-            self.update_schedule(reset=True)
+        # if 'reset' in self.sched_name:
+        #     self.update_schedule(reset=True)
     
     def model_forward(self, x, y, get_feature=False, get_features=False):
         #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
@@ -319,20 +319,20 @@ class TWF(ER):
                 memory_labels = torch.stack(memory_labels).to(self.device)
                 
                 loss_er = self.loss(memory_logits, memory_labels)
-                # loss_der = F.mse_loss(buf_logit, memory_logits)
+                loss_der = F.mse_loss(buf_logit, memory_logits)
                 
-                for i in range(len(memory_logits)):
-                    length = memory_classes[i]
-                    # resize to make equal # of class conditions
-                    buf_logit_seg = buf_logit[i][:length]
-                    memory_logit_seg = memory_logits[i][:length]
+                # for i in range(len(memory_logits)):
+                #     length = memory_classes[i]
+                #     # resize to make equal # of class conditions
+                #     buf_logit_seg = buf_logit[i][:length]
+                #     memory_logit_seg = memory_logits[i][:length]
                     
-                    # substract mean
-                    # buf_logit_seg = (buf_logit_seg - torch.mean(buf_logit_seg, dim=0))
-                    # memory_logit_seg = (memory_logit_seg - torch.mean(memory_logit_seg, dim=0))
+                #     # substract mean
+                #     # buf_logit_seg = (buf_logit_seg - torch.mean(buf_logit_seg, dim=0))
+                #     # memory_logit_seg = (memory_logit_seg - torch.mean(memory_logit_seg, dim=0))
                     
-                    # add per logit
-                    loss_der += F.mse_loss(buf_logit_seg, memory_logit_seg).cpu()
+                #     # add per logit
+                #     loss_der += F.mse_loss(buf_logit_seg, memory_logit_seg).cpu()
                 
                 
             # stream_y = torch.tensor(y[:self.temp_batch_size]).clone().detach()
@@ -363,8 +363,8 @@ class TWF(ER):
         stream_logit = [logit.detach().cpu()  for logit in stream_logit]
         stream_attention_maps = [attention_map.detach().cpu() for attention_map in stream_attention_maps]
         
-        for i in range(len(stream_logit)):
-            stream_logit[i] = nn.functional.pad(stream_logit[i], (0, 100 - stream_logit[i].shape[0]), mode='constant', value=0)
+        # for i in range(len(stream_logit)):
+        #     stream_logit[i] = nn.functional.pad(stream_logit[i], (0, 100 - stream_logit[i].shape[0]), mode='constant', value=0)
         
         x = x.detach().cpu()
         y = y.detach().cpu()

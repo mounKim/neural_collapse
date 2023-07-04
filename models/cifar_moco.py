@@ -373,9 +373,12 @@ class ResNet(nn.Module):
         out4 = self.layer4(out3)
 
         out4 = self.avgpool(out4)
+        
         if self.neck_forward:
             # neck layer
             feature = self.neck(out4)
+        else:
+            feature = out4
 
         feature = torch.flatten(feature, 1)
         

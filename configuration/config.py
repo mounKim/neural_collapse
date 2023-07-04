@@ -45,6 +45,7 @@ def base_parser():
     parser.add_argument("--ood_num_samples", type=int, default=4)
     parser.add_argument("--use_patch_permutation", action="store_true")
     parser.add_argument("--use_synthetic_regularization", action="store_true")
+    parser.add_argument("--use_neck_forward", action="store_true")
     parser.add_argument("--scl_coeff", type=float, default=0.1)
     
     

@@ -13,12 +13,12 @@ import math
 import utils.train_utils 
 import os
 from utils.data_worker import load_data, load_batch
-from utils.train_utils import select_optimizer, select_model, select_scheduler
+from utils.train_utils import select_optimizer, select_model, select_scheduler, SupConLoss
 from utils.augment import my_segmentation_transforms
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
 
-class ETF_ER_RESMEM_VER3(CLManagerBase):
+class ETF_ER_RESMEM_VER6(CLManagerBase):
     def __init__(self,  train_datalist, test_datalist, device, **kwargs):
         if kwargs["temp_batchsize"] is None:
             kwargs["temp_batchsize"] = 0
@@ -30,7 +30,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         
         if self.ood_strategy == "rotate" and self.use_synthetic_regularization:
             self.num_classes = self.num_classes * 4
-        
+            
         self.eval_classes = 0 #kwargs["num_eval_class"]
         self.cls_feature_length = 50
         self.feature_mean_dict = {}
@@ -55,10 +55,12 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.softmax = nn.Softmax(dim=0).to(self.device)
         self.use_feature_distillation = kwargs["use_feature_distillation"]
         
+        self.selfsup_temp = kwargs["selfsup_temp"]
+        self.selfsup_criterion = SupConLoss(temperature=self.selfsup_temp).to(self.device)
+        
         if self.loss_criterion == "DR":
             if self.use_feature_distillation:
                 self.criterion = DR_loss(reduction="none").to(self.device)
-                
             else:
                 self.criterion = DR_loss().to(self.device)
         elif self.loss_criterion == "CE":
@@ -69,10 +71,20 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
         self.regularization_criterion = DR_Reverse_loss(reduction="mean").to(self.device)
         self.compute_accuracy = Accuracy(topk=self.topk)
+        
         self.use_neck_forward = kwargs["use_neck_forward"]
         print("self.use_neck_forward", self.use_neck_forward)
         self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False, Neck=self.use_neck_forward).to(self.device)
         self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes).to(self.device)
+        
+        # initialize
+        self.key_encoder = copy.deepcopy(self.encoder)
+        for param_q, param_k in zip(
+            self.encoder_q.parameters(), self.encoder_k.parameters()
+        ):
+            param_k.data.copy_(param_q.data)  # initialize
+            param_k.requires_grad = False  # not update by gradient
+            
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
         self.etf_initialize()
@@ -81,6 +93,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         self.cls_feature_dict = {}
         self.current_cls_feature_dict_index = {}
         self.note = kwargs["note"]
+        self.scl_coeff = kwargs["scl_coeff"]
         os.makedirs(f"{self.note}", exist_ok=True)
 
     def get_cos_sim(self, a, b):
@@ -195,8 +208,23 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         else:
             with torch.cuda.amp.autocast(self.use_amp):
                 _, feature = self.model(x, get_feature=True)
-                feature = self.pre_logits(feature)
+                feature = self.pre_logits(feature)    
+                
+                f1, f2 = torch.split(feature, [len(feature)//2, len(feature)//2], dim=0)
+                selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+                scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
 
+                print("y1")
+                print(y[:len(y)//2])
+                print("y2")
+                print(y[len(y)//2:])
+
+                '''
+                feature = feature[:len(feature)//2]
+                target = target[:len(target)//2]
+                y = y[:len(y)//2]
+                '''
+                
                 if self.loss_criterion == "DR":
                     loss = self.criterion(feature, target)
                     residual = (target - feature).detach()
@@ -206,7 +234,10 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                     loss = self.criterion(logit, y)
                     residual = (target - feature).detach()
                     #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
-
+                    
+            print("loss", loss, "scl_loss", self.scl_coeff * scl_loss)
+            loss += (self.scl_coeff * scl_loss)
+            
             if self.use_feature_distillation:
                 # calcualte current feature
                 for idx, y_i in enumerate(y):
@@ -330,6 +361,18 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
         x = x / torch.norm(x, p=2, dim=1, keepdim=True)
         return x
 
+    def load_batch(self):
+        stream_end = False
+        while len(self.waiting_batch) == 0:
+            stream_end = self.memory_future_step()
+            if stream_end:
+                break
+        if not stream_end:
+            # 2배로 batch를 늘려주기
+            self.dataloader.load_batch(self.waiting_batch[0] + self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0] + self.waiting_batch_idx[0])
+            del self.waiting_batch[0]
+            del self.waiting_batch_idx[0]
+
     def online_train(self, iterations=1):
         total_loss, correct, num_data = 0.0, 0.0, 0.0
 
@@ -444,7 +487,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 if self.ood_strategy == "cutmix":
                     key, x1, x2 = ood_data
                     x1 = load_batch(x1, self.data_dir, self.test_transform)
-                    x2 = load_batch(x2, self.data_dir, self.test_transform)                
+                    x2 = load_batch(x2, self.data_dir, self.test_transform)
                     x1 = x1.to(self.device)
                     x2 = x2.to(self.device)
                     

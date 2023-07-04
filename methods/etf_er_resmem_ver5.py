@@ -71,7 +71,9 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
 
         self.regularization_criterion = DR_Reverse_loss(reduction="mean").to(self.device)
         self.compute_accuracy = Accuracy(topk=self.topk)
-        self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False).to(self.device)
+        self.use_neck_forward = kwargs["use_neck_forward"]
+        print("self.use_neck_forward", self.use_neck_forward)
+        self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False, Neck=self.use_neck_forward).to(self.device)
         self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes).to(self.device)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)

@@ -462,9 +462,12 @@ class CLManagerBase:
         eval_dict = self.evaluation(self.test_loader, self.criterion)
         self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"], eval_dict["cls_acc"])
 
+        '''
         if sample_num >= self.f_next_time:
             self.get_forgetting(sample_num, test_list, cls_dict, batch_size, n_worker)
             self.f_next_time += self.f_period
+        '''
+        
         self.added = False
         return eval_dict
 

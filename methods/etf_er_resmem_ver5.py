@@ -181,50 +181,37 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
         return 0
 
     def model_forward(self, x, y, sample_nums, augmented_input=False):
-        if self.cutmix:
-            do_cutmix = np.random.rand(1) < 0.5
-        else:
-            do_cutmix = False
-        
-        """Forward training data."""
+
         target = self.etf_vec[:, y].t()
-        if do_cutmix and not augmented_input:
-            x, target_a, target_b, lam = cutmix_data(x=x, y=target, alpha=1.0)
-            with torch.cuda.amp.autocast(self.use_amp):
-                _, feature = self.model(x, get_feature=True)
-                feature = self.pre_logits(feature)
-                #loss = lam * self.criterion(logit, labels_a) + (1 - lam) * self.criterion(logit, labels_b)
-                loss = lam * self.criterion(feature, target_a) + (1 - lam) * self.criterion(feature, target_b)
-        else:
-            with torch.cuda.amp.autocast(self.use_amp):
-                _, feature = self.model(x, get_feature=True)
-                feature = self.pre_logits(feature)    
-                
-                f1, f2 = torch.split(feature, [len(feature)//2, len(feature)//2], dim=0)
-                selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-                scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
+        with torch.cuda.amp.autocast(self.use_amp):
+            _, feature = self.model(x, get_feature=True)
+            feature = self.pre_logits(feature)    
+            
+            f1, f2 = torch.split(feature, [len(feature)//2, len(feature)//2], dim=0)
+            selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
 
-                print("y1")
-                print(y[:len(y)//2])
-                print("y2")
-                print(y[len(y)//2:])
+            print("y1")
+            print(y[:len(y)//2])
+            print("y2")
+            print(y[len(y)//2:])
 
-                '''
-                feature = feature[:len(feature)//2]
-                target = target[:len(target)//2]
-                y = y[:len(y)//2]
-                '''
+            '''
+            feature = feature[:len(feature)//2]
+            target = target[:len(target)//2]
+            y = y[:len(y)//2]
+            '''
+            
+            if self.loss_criterion == "DR":
+                loss = self.criterion(feature, target)
+                residual = (target - feature).detach()
                 
-                if self.loss_criterion == "DR":
-                    loss = self.criterion(feature, target)
-                    residual = (target - feature).detach()
-                    
-                elif self.loss_criterion == "CE":
-                    logit = feature @ self.etf_vec
-                    loss = self.criterion(logit, y)
-                    residual = (target - feature).detach()
-                    #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
-                    
+            elif self.loss_criterion == "CE":
+                logit = feature @ self.etf_vec
+                loss = self.criterion(logit, y)
+                residual = (target - feature).detach()
+                #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
+                
             print("loss", loss, "scl_loss", self.scl_coeff * scl_loss)
             loss += (self.scl_coeff * scl_loss)
             
@@ -335,15 +322,15 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
                         self.ood_store(ood_dict)
                 ''' 
 
-        # accuracy calculation
-        with torch.no_grad():
-            cls_score = feature.detach() @ self.etf_vec
-            if self.use_synthetic_regularization:
-                acc, correct = self.compute_accuracy(cls_score, y, real_entered_num_class = len(self.memory.cls_list), real_num_class = self.real_num_classes)
-            else:    
-                acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
-            
-            acc = acc.item()
+            # accuracy calculation
+            with torch.no_grad():
+                cls_score = feature.detach() @ self.etf_vec
+                if self.use_synthetic_regularization:
+                    acc, correct = self.compute_accuracy(cls_score, y, real_entered_num_class = len(self.memory.cls_list), real_num_class = self.real_num_classes)
+                else:    
+                    acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                
+                acc = acc.item()
         
         return loss, feature, correct
 

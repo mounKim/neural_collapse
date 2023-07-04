@@ -13,7 +13,7 @@ import math
 import utils.train_utils 
 import os
 from utils.data_worker import load_data, load_batch
-from utils.train_utils import select_optimizer, select_model, select_scheduler, SupConLoss
+from utils.train_utils import select_optimizer, select_moco_model, select_scheduler, SupConLoss
 from utils.augment import my_segmentation_transforms
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
@@ -68,22 +68,31 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 self.criterion = nn.CrossEntropyLoss(reduction="none").to(self.device)
             else:
                 self.criterion = nn.CrossEntropyLoss(reduction="mean").to(self.device)
-
+        self.moco_criterion = nn.CrossEntropyLoss().to(self.device)
         self.regularization_criterion = DR_Reverse_loss(reduction="mean").to(self.device)
         self.compute_accuracy = Accuracy(topk=self.topk)
-        
+
+        # MOCO parameters
+        self.moco_k = kwargs["moco_k"]
+        self.moco_dim = kwargs["moco_dim"]
+        self.moco_T = kwargs["moco_T"]
+        self.moco_m = kwargs["moco_m"]
+        self.moco_coeff = kwargs["moco_coeff"]
+
         self.use_neck_forward = kwargs["use_neck_forward"]
         print("self.use_neck_forward", self.use_neck_forward)
-        self.model = select_model(self.model_name, self.dataset, 1, pre_trained=False, Neck=self.use_neck_forward).to(self.device)
-        self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes).to(self.device)
+        self.model = select_moco_model(self.model_name, self.dataset, 1, pre_trained=False, Neck=self.use_neck_forward, K=self.moco_k, dim=self.moco_dim).to(self.device)
+        #self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes).to(self.device)
         
-        # initialize
-        self.key_encoder = copy.deepcopy(self.encoder)
+        # moco initialize
+        self.ema_model = copy.deepcopy(self.model) #select_moco_model(self.model_name, self.dataset, 1, pre_trained=False, Neck=self.use_neck_forward).to(self.device)
         for param_q, param_k in zip(
-            self.encoder_q.parameters(), self.encoder_k.parameters()
+            self.model.parameters(), self.ema_model.parameters()
         ):
             param_k.data.copy_(param_q.data)  # initialize
             param_k.requires_grad = False  # not update by gradient
+        
+
             
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
@@ -95,6 +104,15 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
         self.note = kwargs["note"]
         self.scl_coeff = kwargs["scl_coeff"]
         os.makedirs(f"{self.note}", exist_ok=True)
+
+    @torch.no_grad()
+    def _momentum_update_key_encoder(self):
+        """
+        Momentum update of the key encoder
+        """
+        for param_q, param_k in zip(self.model.parameters(), self.ema_model.parameters()):
+            param_k.data = param_k.data * self.moco_m + param_q.data * (1.0 - self.moco_m)
+            
 
     def get_cos_sim(self, a, b):
         inner_product = (a * b).sum(dim=1)
@@ -158,7 +176,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 y = self.cls_dict[sample['klass']]
                 batch_labels.append(y)
                 x = x.to(self.device)
-                _, sample_feature = self.model(x, get_feature=True)
+                sample_feature, _ = self.model(x)
 
                 if y not in batch_feature_dict.keys():
                     batch_feature_dict[y] = [sample_feature]
@@ -191,53 +209,71 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
         return 0
 
     def model_forward(self, x, y, sample_nums, augmented_input=False):
-        if self.cutmix:
-            do_cutmix = np.random.rand(1) < 0.5
-        else:
-            do_cutmix = False
-        
-        """Forward training data."""
-        target = self.etf_vec[:, y].t()
-        if do_cutmix and not augmented_input:
-            x, target_a, target_b, lam = cutmix_data(x=x, y=target, alpha=1.0)
-            with torch.cuda.amp.autocast(self.use_amp):
-                _, feature = self.model(x, get_feature=True)
-                feature = self.pre_logits(feature)
-                #loss = lam * self.criterion(logit, labels_a) + (1 - lam) * self.criterion(logit, labels_b)
-                loss = lam * self.criterion(feature, target_a) + (1 - lam) * self.criterion(feature, target_b)
-        else:
-            with torch.cuda.amp.autocast(self.use_amp):
-                _, feature = self.model(x, get_feature=True)
-                feature = self.pre_logits(feature)    
-                
-                f1, f2 = torch.split(feature, [len(feature)//2, len(feature)//2], dim=0)
-                selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-                scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
+        with torch.cuda.amp.autocast(self.use_amp):
+            target = self.etf_vec[:, y].t()
+            feature, proj_output = self.model(x)
 
-                print("y1")
-                print(y[:len(y)//2])
-                print("y2")
-                print(y[len(y)//2:])
-
-                '''
-                feature = feature[:len(feature)//2]
-                target = target[:len(target)//2]
-                y = y[:len(y)//2]
-                '''
+            if self.loss_criterion == "DR":
+                loss = self.criterion(feature, target)
+                residual = (target - feature).detach()
                 
-                if self.loss_criterion == "DR":
-                    loss = self.criterion(feature, target)
-                    residual = (target - feature).detach()
-                    
-                elif self.loss_criterion == "CE":
-                    logit = feature @ self.etf_vec
-                    loss = self.criterion(logit, y)
-                    residual = (target - feature).detach()
-                    #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
-                    
-            print("loss", loss, "scl_loss", self.scl_coeff * scl_loss)
-            loss += (self.scl_coeff * scl_loss)
+            elif self.loss_criterion == "CE":
+                logit = feature @ self.etf_vec
+                loss = self.criterion(logit, y)
+                residual = (target - feature).detach()
+                #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
             
+            if len(proj_output.shape) == 1:    
+                proj_output = proj_output.unsqueeze(dim=0)
+                                
+            ### Moco Loss Calculation ###
+            q = nn.functional.normalize(proj_output, dim=1)
+            
+            # compute key features
+            with torch.no_grad():  # no gradient to keys
+                self._momentum_update_key_encoder()  # update the key encoder
+                '''
+                # shuffle for making use of BN
+                im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+
+                _, _, k = self.ema_model(im_k, get_feature=True)  # keys: NxC
+                k = nn.functional.normalize(k, dim=1)
+
+                # undo shuffle
+                k = self._batch_unshuffle_ddp(k, idx_unshuffle)
+                '''
+                    
+                _, k = self.ema_model(x)
+
+                if len(k.shape) == 1:    
+                    k = k.unsqueeze(dim=0)
+
+                k = nn.functional.normalize(k, dim=1)
+
+            ##compute logits##
+            # positive logits: Nx1
+            l_pos = torch.einsum("nc,nc->n", [q, k]).unsqueeze(-1)
+            
+            # negative logits: NxK
+            l_neg = torch.einsum("nc,ck->nk", [q, self.model.queue.clone().detach()])
+
+            # logits: Nx(1+K)
+            logits = torch.cat([l_pos, l_neg], dim=1)
+
+            # apply temperature
+            logits /= self.moco_T 
+
+            # labels: positive key indicators
+            labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
+
+            # dequeue and enqueue
+            self.model._dequeue_and_enqueue(k)
+            
+            selfsup_loss = self.moco_criterion(logits, labels)
+            
+            # TODO loss balancing
+            loss += (self.moco_coeff * selfsup_loss)
+                            
             if self.use_feature_distillation:
                 # calcualte current feature
                 for idx, y_i in enumerate(y):
@@ -345,15 +381,15 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                         self.ood_store(ood_dict)
                 ''' 
 
-        # accuracy calculation
-        with torch.no_grad():
-            cls_score = feature.detach() @ self.etf_vec
-            if self.use_synthetic_regularization:
-                acc, correct = self.compute_accuracy(cls_score, y, real_entered_num_class = len(self.memory.cls_list), real_num_class = self.real_num_classes)
-            else:    
-                acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
-            
-            acc = acc.item()
+            # accuracy calculation
+            with torch.no_grad():
+                cls_score = feature.detach() @ self.etf_vec
+                if self.use_synthetic_regularization:
+                    acc, correct = self.compute_accuracy(cls_score, y, real_entered_num_class = len(self.memory.cls_list), real_num_class = self.real_num_classes)
+                else:    
+                    acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                
+                acc = acc.item()
         
         return loss, feature, correct
 
@@ -369,7 +405,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 break
         if not stream_end:
             # 2배로 batch를 늘려주기
-            self.dataloader.load_batch(self.waiting_batch[0] + self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0] + self.waiting_batch_idx[0])
+            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0])
             del self.waiting_batch[0]
             del self.waiting_batch_idx[0]
 
@@ -637,7 +673,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
             return x
         x = self.extract_feat(img)
         '''
-        _, feature = self.model(img, get_feature=True)
+        feature, _ = self.model(img)
         res = self.sub_simple_test(feature, post_process=False)
         res = res.argmax(dim=-1)
         '''
@@ -711,7 +747,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
-                _, features = self.model(x, get_feature=True)
+                features, _ = self.model(x)
                 features = self.pre_logits(features)
 
                 if self.use_residual:

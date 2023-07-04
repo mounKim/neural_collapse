@@ -18,6 +18,13 @@ def base_parser():
         help="[mnist, cifar10, cifar100, imagenet]",
     )
 
+    # for MOCO
+    parser.add_argument("--moco_k", type=int, default=4096, help="pre_train epoch")
+    parser.add_argument("--moco_dim", type=int, default=128, help="pre_train epoch")
+    parser.add_argument("--moco_T", type=float, default=0.07, help="pre_train epoch")
+    parser.add_argument("--moco_m", type=float, default=0.999, help="pre_train epoch")
+    parser.add_argument("--moco_coeff", type=float, default=0.1, help="pre_train epoch")
+
     # for ETF structure
     parser.add_argument("--num_eval_class", type=int, default=10, help="pre_train epoch")
     parser.add_argument("--num_class", type=int, default=10, help="pre_train epoch")

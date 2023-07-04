@@ -192,6 +192,14 @@ def select_method(args, train_datalist, test_datalist, device):
             device=device,
             **kwargs,
         )
+    elif args.mode == "twf":        
+        method = TWF(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+        
     elif args.mode == "ours":
         method = Ours(
             train_datalist=train_datalist,

@@ -29,6 +29,7 @@ class CLManagerBase:
 
         self.device = device
         self.added = True
+        self.writer = SummaryWriter(f'tensorboard/{kwargs["dataset"]}/{kwargs["note"]}/seed_{kwargs["rnd_seed"]}')
         self.method_name = kwargs["mode"]
         self.dataset = kwargs["dataset"]
         self.sigma = kwargs["sigma"]
@@ -77,11 +78,12 @@ class CLManagerBase:
         self.test_datalist = test_datalist
         self.cls_dict = {}
         self.total_samples = len(self.train_datalist)
-
-        self.train_transform, self.test_transform, self.cpu_transform, self.test_gpu_transform, self.n_classes = get_transform(self.dataset, self.transforms, self.transform_on_gpu)
+        
+        self.train_transform, self.test_transform, self.cpu_transform, self.n_classes = get_transform(self.dataset, self.transforms, self.transform_on_gpu)
         self.cutmix = "cutmix" in kwargs["transforms"]
 
-        self.model = select_model(self.model_name, self.dataset, 1).to(self.device)
+        self.model = select_model(self.model_name, self.dataset, 1,).to(self.device)
+        # self.model = select_model(self.model_name, self.dataset, 1, pre_trained=True).to(self.device)
         print("model")
         print(self.model)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)

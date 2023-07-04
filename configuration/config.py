@@ -67,12 +67,12 @@ def base_parser():
     parser.add_argument("--min_resize_threshold", type=int, default=16, help="")
     parser.add_argument("--resize_maps", type=int, choices=[0,1], default=0, help="")
 
-    # 얘네는 default가 없음
-    parser.add_argument("--lambda_diverse_loss", type=float, help="")
-    parser.add_argument("--lambda_fp_replay", type=float, help="")
-    parser.add_argument("--lambda_fp", type=float, help="")
-    parser.add_argument("--der_alpha", type=float, help="")
-    parser.add_argument("--der_beta", type=float, help="")
+
+    parser.add_argument("--lambda_diverse_loss", default=0.3, type=float, help="")
+    parser.add_argument("--lambda_fp_replay", default=0.3, type=float, help="")
+    parser.add_argument("--lambda_fp", type=float, default=0.03, help="")
+    parser.add_argument("--der_alpha", type=float, default=0.3, help="")
+    parser.add_argument("--der_beta", type=float, default=0.8, help="")
 
     parser.add_argument("--rnd_seed", type=int, help="Random seed number.")
     parser.add_argument(
@@ -243,6 +243,11 @@ def base_parser():
     parser.add_argument('--reduce_bpdepth', action="store_true", help='Reduce backpropagation depth for distill loss')
     parser.add_argument('--importance', type=str, default='none', help='feature map importance type')
     parser.add_argument('--imp_ema', type=float, default=0.99, help='ema_ratio for updating importance')
+
+    # REMIND
+    parser.add_argument('--codebook_size', type=int, default=256, help='size of codebook for REMIND memory')
+    parser.add_argument('--n_codebooks', type=int, default=32, help='# of codebooks')
+
 
     args = parser.parse_args()
     return args

@@ -410,7 +410,7 @@ class TeacherForcingLoss(nn.Module):
 class MultiTaskAFDAlternative(nn.Module):
 
     def __init__(self, chw: Tuple[int], n_tasks: int,
-                 cpt: int, clear_grad: bool = False, 
+                 clear_grad: bool = False, 
                  use_overhaul_fd: bool = False,
                  lambda_diverse_loss: float = 0.0,
                  use_hard_softmax: bool = True,
@@ -426,7 +426,6 @@ class MultiTaskAFDAlternative(nn.Module):
 
         self.c, self.h, self.w = chw
         self.n_tasks = n_tasks
-        self.cpt = cpt
         self.clear_grad = clear_grad
         self.use_overhaul_fd = use_overhaul_fd
         self.teacher_forcing_or = teacher_forcing_or

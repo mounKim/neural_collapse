@@ -52,7 +52,6 @@ def main():
     train_datalist, cls_dict, cls_addition = get_train_datalist(args.dataset, args.sigma, args.repeat, args.init_cls, args.rnd_seed)
     test_datalist = get_test_datalist(args.dataset)
     samples_cnt = 0
-
     # Reduce datalist in Debug mode
     if args.debug:
         random.shuffle(train_datalist)
@@ -70,11 +69,12 @@ def main():
 
     samples_cnt = 0
     task_id = 0
-
+    
+    
     for i, data in enumerate(train_datalist):
 
         # explicit task boundary for twf
-        if samples_cnt % args.samples_per_task == 0 and args.mode == "bic":
+        if samples_cnt % args.samples_per_task == 0 and (args.mode == "bic" or args.mode == "twf"):
             method.online_before_task(task_id)
             task_id += 1
 
@@ -86,6 +86,10 @@ def main():
             eval_results["test_acc"].append(eval_dict['avg_acc'])
             #eval_results["percls_acc"].append(eval_dict['cls_acc'])
             eval_results["data_cnt"].append(samples_cnt)
+
+        if samples_cnt % args.samples_per_task == 0 and (args.mode == "twf"):
+            method.online_after_task()
+
     if eval_results["data_cnt"][-1] != samples_cnt:
         eval_dict = method.online_evaluate(test_datalist, samples_cnt, 512, args.n_worker, cls_dict, cls_addition,
                                            data["time"])

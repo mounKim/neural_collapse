@@ -697,7 +697,6 @@ def get_data_loader(opt_dict, dataset, pre_train=False):
         batch_size=batch_size,
         num_workers=opt_dict["n_worker"],
     )
-
     test_dataset = ImageDataset(
         exp_test_df,
         dataset=dataset,
@@ -714,7 +713,7 @@ def get_data_loader(opt_dict, dataset, pre_train=False):
 
     return train_loader, test_loader
 
-def select_model(model_name, dataset, num_classes=None, opt_dict=None, pre_trained=False):
+def select_model(model_name, dataset, num_classes=None, opt_dict=None, pre_trained=False, G=False, F=False):
     '''
     model_imagenet = False
     opt = edict(
@@ -768,7 +767,7 @@ def select_model(model_name, dataset, num_classes=None, opt_dict=None, pre_train
     if opt_dict is not None:
         model = load_initial_checkpoint(pre_dataset, model, opt_dict["device"], load_cp_path = path_load_cp)
     ''' 
-    return resnet18(pretrained=pre_trained, progress=True)
+    return resnet18(pretrained=pre_trained, dataset=False, progress=True, F=False, G=False)
 
 ##### for ASER #####
 def compute_knn_sv(model, eval_x, eval_y, cand_x, cand_y, k, device="cpu"):
@@ -881,5 +880,52 @@ def sorted_cand_ind(eval_df, cand_df, n_eval, n_cand):
     # Sort candidate set indices based on distance
     sorted_cand_ind_ = distance_matrix.argsort(1)
     return sorted_cand_ind_
+
+
+class ModelWrapper(nn.Module):
+    def __init__(self, model, output_layer_names, return_single=False):
+        super(ModelWrapper, self).__init__()
+        self.model = model
+        self.output_layer_names = output_layer_names
+        self.outputs = {}
+        self.return_single = return_single
+        add_hooks(self.model, self.outputs, self.output_layer_names)
+
+    def forward(self, images):
+        self.model(images)
+        output_vals = [self.outputs[output_layer_name] for output_layer_name in self.output_layer_names]
+        if self.return_single:
+            return output_vals[0]
+        else:
+            return output_vals
+
+
+
+def get_name_to_module(model):
+    name_to_module = {}
+    for m in model.named_modules():
+        name_to_module[m[0]] = m[1]
+    return name_to_module
+
+
+def get_activation(all_outputs, name):
+    def hook(model, input, output):
+        all_outputs[name] = output.detach()
+
+    return hook
+
+
+def add_hooks(model, outputs, output_layer_names):
+    """
+
+    :param model:
+    :param outputs: Outputs from layers specified in `output_layer_names` will be stored in `output` variable
+    :param output_layer_names:
+    :return:
+    """
+    name_to_module = get_name_to_module(model)
+    for output_layer_name in output_layer_names:
+        name_to_module[output_layer_name].register_forward_hook(get_activation(outputs, output_layer_name))
+
 
 

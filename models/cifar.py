@@ -16,6 +16,41 @@ model_urls = {
     'wide_resnet101_2': 'https://download.pytorch.org/models/wide_resnet101_2-32ee1156.pth',
 }
 
+model_files = {
+    'cifar10': '',
+    'cifar100': 'cifar100_cls10_REMIND.pt',
+    'tinyimagenet': '',
+    'imagenet': '',
+}
+
+def safe_load_dict(model, new_model_state, should_resume_all_params=False):
+    old_model_state = model.state_dict()
+    c = 0
+    if should_resume_all_params:
+        for old_name, old_param in old_model_state.items():
+            assert old_name in list(new_model_state.keys()), "{} parameter is not present in resumed checkpoint".format(
+                old_name)
+    for name, param in new_model_state.items():
+        n = name.split('.')
+        beg = n[0]
+        end = n[1:]
+        if beg == 'module':
+            name = '.'.join(end)
+        if name not in old_model_state:
+            # print('%s not found in old model.' % name)
+            continue
+        if isinstance(param, nn.Parameter):
+            # backwards compatibility for serialized parameters
+            param = param.data
+        c += 1
+        if old_model_state[name].shape != param.shape:
+            print('Shape mismatch...ignoring %s' % name)
+            continue
+        else:
+            old_model_state[name].copy_(param)
+    if c == 0:
+        raise AssertionError('No previous ckpt names matched and the ckpt was not loaded properly.')
+
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -25,7 +60,6 @@ def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
-
 
 class MLPFFNNeck(nn.Module):
     def __init__(self, in_channels=512, out_channels=512):
@@ -75,6 +109,10 @@ class BasicBlock(nn.Module):
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None):
         super(BasicBlock, self).__init__()
+        # Save the pre-relu feature map for the attention module
+        self.return_prerelu = False
+        self.prerelu = None
+        
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         if groups != 1 or base_width != 64:
@@ -104,6 +142,8 @@ class BasicBlock(nn.Module):
             identity = self.downsample(x)
 
         out += identity
+        if self.return_prerelu:
+            self.prerelu = out
         out = self.relu(out)
 
         return out
@@ -121,6 +161,10 @@ class Bottleneck(nn.Module):
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None):
         super(Bottleneck, self).__init__()
+        # Save the pre-relu feature map for the attention module
+        self.return_prerelu = False
+        self.prerelu = None
+        
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.)) * groups
@@ -153,13 +197,27 @@ class Bottleneck(nn.Module):
             identity = self.downsample(x)
 
         out += identity
+        if self.return_prerelu:
+            self.prerelu = out.clone()
         out = self.relu(out)
 
         return out
 
-def _resnet(arch, block, layers, pretrained, progress, **kwargs):
+def _resnet(arch, block, layers, pretrained, progress, dataset=False, G=False, F=False, **kwargs):
     model = ResNet(block, layers, **kwargs)
+
     if pretrained:
+        if G:
+            model = ResNet_G(block, layers, **kwargs)
+            resumed = torch.load(model_files[dataset])
+            safe_load_dict(model, resumed['state_dict'], should_resume_all_params=True)
+            return model
+        elif F:
+            model = ResNet_F(block, layers, **kwargs)
+            resumed = torch.load(model_files[dataset])
+            safe_load_dict(model, resumed['state_dict'], should_resume_all_params=True)
+            return model
+        
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
         model_dict = model.state_dict()
@@ -175,8 +233,8 @@ def _resnet(arch, block, layers, pretrained, progress, **kwargs):
 
     return model
 
-def resnet18(pretrained=False, progress=True, **kwargs):
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress, **kwargs)
+def resnet18(pretrained=False, progress=True, dataset=False, G=False, F=False, **kwargs):
+    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress, dataset=dataset, G=G, F=F, **kwargs)
 
 
 class ResNet(nn.Module):
@@ -185,6 +243,7 @@ class ResNet(nn.Module):
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet, self).__init__()
+        self.return_prerelu = False
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -256,37 +315,102 @@ class ResNet(nn.Module):
                                 norm_layer=norm_layer))
 
         return nn.Sequential(*layers)
+    
+    def set_return_prerelu(self, enable=True):
+        self.return_prerelu = enable
+        for c in self.modules():
+            if isinstance(c, BasicBlock) or isinstance(c, Bottleneck):
+                c.return_prerelu = enable
+                
+    def _forward_impl(self, x, get_feature=False, get_features=False):
+        # See note [TorchScript super()]
+        x = self.conv1(x)
+        x = self.bn1(x)
+        if self.return_prerelu:
+            out0_pre = x.clone()
+        x = self.relu(x)
+        out0 = self.maxpool(x)
 
-    def _forward_impl(self, x, get_feature, feature_input):
-        
-        if feature_input is None:
-            # See note [TorchScript super()]
-            x = self.conv1(x)
-            x = self.bn1(x)
-            x = self.relu(x)
-            x = self.maxpool(x)
+        out1 = self.layer1(out0)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = self.layer4(out3)
 
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.layer3(x)
-            x = self.layer4(x)
+        feature = self.avgpool(out4)
 
-            x = self.avgpool(x)
+        # neck layer
+        #x = self.neck(x)
 
-            # neck layer
-            x = self.neck(x)
-
-        else:
-            x = feature_input
-
-        x = torch.flatten(x, 1)
-        out = self.fc(x)
+        feature = torch.flatten(feature, 1)
+        out = self.fc(feature)
 
         if get_feature:
-            return out, x
+            return out, feature
+        elif get_features:
+            features = [
+                out0 if not self.return_prerelu else out0_pre,
+                out1 if not self.return_prerelu else self.layer1[-1].prerelu,
+                out2 if not self.return_prerelu else self.layer2[-1].prerelu,
+                out3 if not self.return_prerelu else self.layer3[-1].prerelu,
+                out4 if not self.return_prerelu else self.layer4[-1].prerelu,
+                ]
+            return out, features
         else:
             return out
+    
+    def _forward_F(self, x):
+        out0 = self.layer4[1](x)
+        out1 = self.avgpool(out0)
+        feature = torch.flatten(out1, 1)
+        out = self.fc(feature)
+        return out
 
-    def forward(self, x, get_feature=False, feature_input=None):
-        return self._forward_impl(x, get_feature, feature_input)
+    def _forward_G(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        out0 = self.maxpool(x)
+        out1 = self.layer1(out0)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = self.layer4[0](out3)
+        feature = torch.flatten(out4, 1)
+        out = self.fc(feature)
+        return out
 
+    def forward(self, x, get_feature=False, get_features=False, F=None, G=None):
+        if F:
+            return self._forward_F(x) # last 
+        elif G:
+            return self._forward_G(x)
+        else:
+            return self._forward_impl(x, get_feature, get_features)
+
+class ResNet_G(ResNet):
+    def __init__(self, block, layers):
+        super(ResNet,self).__init__(block, layers)
+        del self.layer4[1]
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        out0 = self.maxpool(x)
+        out1 = self.layer1(out0)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = self.layer4[0](out3)
+        feature = torch.flatten(out4, 1)
+        out = self.fc(feature)
+        return out
+    
+class ResNet_F(ResNet):
+    def __init__(self, block, layers):
+        super(ResNet,self).__init__(block, layers)
+
+    def forward(self, x):
+        out0 = self.layer4[1](x)
+        out1 = self.avgpool(out0)
+        feature = torch.flatten(out1, 1)
+        out = self.fc(feature)
+        return out

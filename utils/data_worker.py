@@ -85,45 +85,52 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
             r = index_queue.get(timeout=TIMEOUT)
         except queue.Empty:
             continue
-        data = dict()
-        images = []
-        labels = []
-        indexs = []
-        test_images = []
-        if len(r) > 0:
-            for sample in r:
-                if use_kornia:
-                    img_name = sample["file_name"]
-                    img_path = os.path.join(data_dir, img_name)
-                    image = PIL.Image.open(img_path).convert("RGB")
-                    images.append(preprocess(image))
-                elif transform_on_gpu:
-                    images.append(load_data(sample, data_dir, cpu_transform))
-                else:
-                    images.append(load_data(sample, data_dir, transform))
-                    if test_transform is not None:
-                        test_images.append(load_data(sample, data_dir, test_transform))
-                labels.append(sample["label"])
-                indexs.append(sample["sample_num"])
-            if transform_on_worker:
-                if use_kornia:
-                    images = kornia_randaug(torch.stack(images).to(device))
-                elif transform_on_gpu:
-                    if test_transform is not None:
-                        test_images = test_transform(torch.stack(images).float().to(device))
-                    images = transform(torch.stack(images).to(device))
-                else:
-                    images = torch.stack(images)
-                    if test_transform is not None:
-                        test_images = torch.stack(test_images)
+        
+        try:
+            data = dict()
+            images = []
+            labels = []
+            indexs = []
+            test_images = []
+            
+            # twc
+            task_ids = []
+            if len(r) > 0:
+                for sample in r:
+                    if use_kornia:
+                        img_name = sample["file_name"]
+                        img_path = os.path.join(data_dir, img_name)
+                        image = PIL.Image.open(img_path).convert("RGB")
+                        images.append(preprocess(image))
+                    elif transform_on_gpu:
+                        images.append(load_data(sample, data_dir, cpu_transform))
+                    else:
+                        images.append(load_data(sample, data_dir, transform))
+                        if test_transform is not None:
+                            test_images.append(load_data(sample, data_dir, test_transform))
+                    labels.append(sample["label"])
+                    indexs.append(sample["sample_num"])
+                    if 'task_id' in sample:
+                        task_ids.append(sample["task_id"])
+                        
+                if transform_on_worker:
+                    if use_kornia:
+                        images = kornia_randaug(torch.stack(images).to(device))
+                    elif transform_on_gpu:
+                        if test_transform is not None:
+                            test_images = test_transform(torch.stack(images).float().to(device))
+                        images = transform(torch.stack(images).to(device))
+                    else:
+                        images = torch.stack(images)
+                        if test_transform is not None:
+                            test_images = torch.stack(test_images)
+                data['image'] = images
+                data['test_image'] = test_images
+                data['label'] = torch.LongTensor(labels)
+                data['sample_num'] = torch.LongTensor(indexs)
+                if len(task_ids) > 0:
+                    data['task_id'] = torch.LongTensor(task_ids)
+                data_queue.put(data)
             else:
-                images = torch.stack(images)
-                if test_transform is not None:
-                    test_images = torch.stack(test_images)
-            data['image'] = images
-            data['test_image'] = test_images
-            data['label'] = torch.LongTensor(labels)
-            data['sample_num'] = torch.LongTensor(indexs)
-            data_queue.put(data)
-        else:
-            data_queue.put(None)
+                data_queue.put(None)
+        except: print('Error in worker loop')

@@ -49,7 +49,6 @@ class MIR(ER):
         for i in range(self.future_steps):
             self.load_batch()
 
-
     def memory_future_step(self):
         try:
             sample = next(self.data_stream)

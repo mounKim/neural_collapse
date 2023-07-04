@@ -126,22 +126,29 @@ class MultiProcessLoader():
         images = []
         labels = []
         sample_nums = []
+    
+        # for twf
+        task_ids = []
         
         for i in range(self.n_workers):
             loaded_samples = self.result_queues[i].get(timeout=300.0)
             if loaded_samples is not None:
                 images.append(loaded_samples["image"])
                 labels.append(loaded_samples["label"])
+                if "task_id" in loaded_samples.keys():
+                    task_ids.append(loaded_samples["task_id"])
                 sample_nums.append(loaded_samples["sample_num"])
-                
         if len(images) > 0:
             images = torch.cat(images)
             labels = torch.cat(labels)
             sample_nums = torch.cat(sample_nums)
+            if task_ids:
+                task_ids = torch.cat(task_ids)
             if self.transform_on_gpu and not self.transform_on_worker:
                 images = self.transform(images.to(self.device))
             data['image'] = images
             data['label'] = labels
+            data['task_id'] = task_ids
             data['sample_nums'] = sample_nums
             return data
         else:

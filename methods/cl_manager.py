@@ -79,7 +79,7 @@ class CLManagerBase:
         self.cls_dict = {}
         self.total_samples = len(self.train_datalist)
         
-        self.train_transform, self.test_transform, self.cpu_transform, self.n_classes = get_transform(self.dataset, self.transforms, self.transform_on_gpu)
+        self.train_transform, self.test_transform, self.cpu_transform, self.test_gpu_transform, self.n_classes = get_transform(self.dataset, self.transforms, self.transform_on_gpu)
         self.cutmix = "cutmix" in kwargs["transforms"]
 
         self.model = select_model(self.model_name, self.dataset, 1,).to(self.device)

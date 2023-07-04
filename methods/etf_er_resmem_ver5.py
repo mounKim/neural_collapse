@@ -202,6 +202,11 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
                 selfsup_feature = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
                 scl_loss = self.selfsup_criterion(selfsup_feature, y[:len(y)//2])
 
+                print("y1")
+                print(y[:len(y)//2])
+                print("y2")
+                print(y[len(y)//2:])
+
                 '''
                 feature = feature[:len(feature)//2]
                 target = target[:len(target)//2]
@@ -531,6 +536,7 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
         self.balanced_replace_memory(sample, sample_num)
 
     def add_new_class(self, class_name, sample):
+        self.added = True
         self.cls_dict[class_name] = len(self.exposed_classes)
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)

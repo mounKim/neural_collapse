@@ -28,7 +28,7 @@ class CLManagerBase:
     def __init__(self, train_datalist, test_datalist, device, **kwargs):
 
         self.device = device
-
+        self.added = True
         self.method_name = kwargs["mode"]
         self.dataset = kwargs["dataset"]
         self.sigma = kwargs["sigma"]
@@ -244,6 +244,7 @@ class CLManagerBase:
             self.temp_batch = []
 
     def add_new_class(self, class_name):
+        self.added = True
         self.cls_dict[class_name] = len(self.exposed_classes)
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)
@@ -439,28 +440,30 @@ class CLManagerBase:
 
 
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
-        test_df = pd.DataFrame(test_list)
-        exp_test_df = test_df[test_df['klass'].isin(self.exposed_classes)]
-        print("exp_test_df", len(exp_test_df))
-        test_dataset = ImageDataset(
-            exp_test_df,
-            dataset=self.dataset,
-            transform=self.test_transform,
-            cls_list=self.exposed_classes,
-            data_dir=self.data_dir
-        )
-        test_loader = DataLoader(
-            test_dataset,
-            shuffle=True,
-            batch_size=batch_size,
-            num_workers=n_worker,
-        )
-        eval_dict = self.evaluation(test_loader, self.criterion)
+        if self.added:
+            test_df = pd.DataFrame(test_list)
+            exp_test_df = test_df[test_df['klass'].isin(self.exposed_classes)]
+            print("exp_test_df", len(exp_test_df))
+            test_dataset = ImageDataset(
+                exp_test_df,
+                dataset=self.dataset,
+                transform=self.test_transform,
+                cls_list=self.exposed_classes,
+                data_dir=self.data_dir
+            )
+            self.test_loader = DataLoader(
+                test_dataset,
+                shuffle=True,
+                batch_size=batch_size,
+                num_workers=n_worker,
+            )
+        eval_dict = self.evaluation(self.test_loader, self.criterion)
         self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"], eval_dict["cls_acc"])
 
         if sample_num >= self.f_next_time:
             self.get_forgetting(sample_num, test_list, cls_dict, batch_size, n_worker)
             self.f_next_time += self.f_period
+        self.added = False
         return eval_dict
 
 

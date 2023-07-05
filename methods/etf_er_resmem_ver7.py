@@ -18,7 +18,7 @@ from utils.augment import my_segmentation_transforms
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
 
-class ETF_ER_RESMEM_VER6(CLManagerBase):
+class ETF_ER_RESMEM_VER7(CLManagerBase):
     def __init__(self,  train_datalist, test_datalist, device, **kwargs):
         if kwargs["temp_batchsize"] is None:
             kwargs["temp_batchsize"] = 0
@@ -340,8 +340,13 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
     def model_forward(self, x, y, sample_nums, augmented_input=False):
         
         with torch.cuda.amp.autocast(self.use_amp):
+            print("x", x.shape)
+            x_q = x[:len(x)//2]
+            x_k = x[len(x)//2:]
+            y = y[:len(y)//2]
+            
             target = self.etf_vec[:, y].t()
-            feature, proj_output = self.model(x)
+            feature, proj_output = self.model(x_q)
             feature = self.pre_logits(feature)
 
             if self.loss_criterion == "DR":
@@ -364,7 +369,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
             with torch.no_grad():  # no gradient to keys
                 self._momentum_update_key_encoder()  # update the key encoder
                     
-                _, k = self.ema_model(x)
+                _, k = self.ema_model(x_k)
 
                 if len(k.shape) == 1:    
                     k = k.unsqueeze(dim=0)
@@ -519,7 +524,7 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 break
         if not stream_end:
             # 2배로 batch를 늘려주기
-            self.dataloader.load_batch(self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0])
+            self.dataloader.load_batch(self.waiting_batch[0] + self.waiting_batch[0], self.memory.cls_dict, self.waiting_batch_idx[0] + self.waiting_batch_idx[0])
             del self.waiting_batch[0]
             del self.waiting_batch_idx[0]
 

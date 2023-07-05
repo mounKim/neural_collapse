@@ -136,6 +136,42 @@ class SDP(CLManagerBase):
             self.report_training(sample_num, train_loss, train_acc)
             self.num_updates -= int(self.num_updates)
 
+    def online_train(self, iterations=1):
+        total_loss, correct, num_data = 0.0, 0.0, 0.0
+
+        for i in range(iterations):
+            self.model.train()
+            data = self.get_batch()
+            x = data["image"].to(self.device)
+            y = data["label"].to(self.device)
+            sample_nums = data["sample_nums"].to(self.device)
+            self.before_model_update()
+
+            self.optimizer.zero_grad()
+            logit, loss = self.model_forward(x,y, sample_nums)
+
+            _, preds = logit.topk(self.topk, 1, True, True)
+
+            if self.use_amp:
+                self.scaler.scale(loss).backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.optimizer.step()
+
+            #self.total_flops += (len(y) * self.backward_flops)
+
+            self.after_model_update()
+
+            total_loss += loss.item()
+            correct += torch.sum(preds == y.unsqueeze(1)).item()
+            num_data += y.size(0)
+
+        return total_loss / iterations, correct / num_data
+
     def sample_inference(self, sample):
         self.sdp_model.eval()
         x = load_data(sample, self.data_dir, self.test_transform).unsqueeze(0)

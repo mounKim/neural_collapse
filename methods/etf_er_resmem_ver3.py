@@ -179,10 +179,10 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
 
     def model_forward(self, x, y, sample_nums, augmented_input=False):
         
-        """Forward training data."""
-        target = self.etf_vec[:, y].t()
-
         with torch.cuda.amp.autocast(self.use_amp):
+            """Forward training data."""
+            target = self.etf_vec[:, y].t()
+
             _, feature = self.model(x, get_feature=True)
             feature = self.pre_logits(feature)
 
@@ -313,7 +313,7 @@ class ETF_ER_RESMEM_VER3(CLManagerBase):
                 
                 acc = acc.item()
         
-        return loss, feature, correct
+            return loss, feature, correct
 
     def pre_logits(self, x):
         x = x / torch.norm(x, p=2, dim=1, keepdim=True)

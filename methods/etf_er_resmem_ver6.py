@@ -207,11 +207,142 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
             self.future_num_updates -= int(self.future_num_updates)
         self.future_sample_num += 1
         return 0
-
+    
+    '''
     def model_forward(self, x, y, sample_nums, augmented_input=False):
+        
+        """Forward training data."""
+
+        with torch.cuda.amp.autocast(self.use_amp):
+            target = self.etf_vec[:, y].t()
+            feature, _ = self.model(x, get_feature=True)
+            feature = self.pre_logits(feature)
+
+            if self.loss_criterion == "DR":
+                loss = self.criterion(feature, target)
+                residual = (target - feature).detach()
+                
+            elif self.loss_criterion == "CE":
+                logit = feature @ self.etf_vec
+                loss = self.criterion(logit, y)
+                residual = (target - feature).detach()
+                #residual = (F.one_hot(y, num_classes=self.num_learned_class) - self.softmax(logit/self.softmax_temperature)).detach()
+
+            if self.use_feature_distillation:
+                # calcualte current feature
+                for idx, y_i in enumerate(y):
+                    if y_i not in self.current_cls_feature_dict.keys():
+                        self.current_cls_feature_dict[y_i.item()] = [feature[idx].detach()]
+                    else:
+                        self.current_cls_feature_dict[y_i.item()].append(feature[idx].detach())
+                            
+                # check over storing
+                for y_i in torch.unique(y):
+                    if len(self.current_cls_feature_dict[y_i.item()]) >= self.current_feature_num:
+                        self.current_cls_feature_dict[y_i.item()] = self.current_cls_feature_dict[y_i][-self.current_cls_feature_num:]
+
+            if not augmented_input:
+                if self.use_feature_distillation:
+                    past_feature = torch.stack([self.pre_logits(self.cls_feature_dict[y_i.item()]) for y_i in y], dim=0)
+                    target_fc = torch.stack([self.etf_vec[:, y_i.item()] for y_i in y], dim=0)
+                    l2_loss = ((feature - past_feature.detach().squeeze()) ** 2).sum(dim=1)
+                    # naive distllation
+                    if self.distill_strategy == "naive":
+                        print("loss", loss.mean(), "l2_loss", self.distill_beta * l2_loss.mean())
+                        loss = (loss + self.distill_beta * l2_loss).mean()
+
+                    # similarity based distillation
+                    elif self.distill_strategy == "classwise":
+                        past_cos_sim = torch.abs(self.get_cos_sim(target_fc, past_feature.detach().squeeze(dim=1)))
+                        past_cos_sim -= self.distill_threshold
+                        beta_masking = torch.clamp(past_cos_sim, min=0.0, max=1.0)
+                        loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
+                    
+                    elif self.distill_strategy == "classwise_difference":
+                        current_feature = torch.stack([self.pre_logits(torch.mean(torch.stack(self.current_cls_feature_dict[y_i.item()], dim=0), dim=0).unsqueeze(0)) for y_i in y], dim=0)
+                        past_cos_sim = self.get_cos_sim(target_fc, past_feature.detach().squeeze(dim=1))
+                        current_cos_sim = self.get_cos_sim(target_fc, current_feature.squeeze(dim=1).to(self.device))
+                        masking = torch.abs(past_cos_sim) > torch.abs(current_cos_sim)
+                        beta_masking = torch.abs(past_cos_sim)
+                        beta_masking -= self.distill_threshold
+                        beta_masking = torch.clamp(beta_masking, min=0.0, max=1.0)
+                        beta_masking = masking * beta_masking
+                        loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
+                
+                    elif self.distill_strategy == "classwise_difference_ver2":
+                        current_feature = torch.stack([self.pre_logits(torch.mean(torch.stack(self.current_cls_feature_dict[y_i.item()], dim=0), dim=0).unsqueeze(0)) for y_i in y], dim=0)
+                        past_cos_sim = self.get_cos_sim(target_fc, past_feature.detach().squeeze(dim=1))
+                        current_cos_sim = self.get_cos_sim(target_fc, current_feature.squeeze(dim=1).to(self.device))
+                        masking = torch.abs(past_cos_sim) > torch.abs(current_cos_sim)
+                        beta_masking = torch.abs(past_cos_sim) - torch.abs(current_cos_sim)
+                        beta_masking -= self.distill_threshold
+                        beta_masking = torch.clamp(beta_masking, min=0.0, max=1.0)
+                        beta_masking = masking * beta_masking
+                        #sim_difference = torch.abs(past_cos_sim - current_cos_sim)
+                        #sim_difference -= self.distill_threshold
+                        #beta_masking = torch.clamp(sim_difference, min=0.0, max=1.0)
+                        print("y")
+                        print(y)
+                        print("beta_masking")
+                        print(beta_masking)
+                        print("loss", loss.mean(), "l2_loss", (self.distill_beta * beta_masking * l2_loss).mean())
+                        loss = (loss + self.distill_beta * beta_masking * l2_loss).mean()
+
+                # residual dict update
+                if self.use_residual:
+                    if self.use_residual_unique:    
+                        for idx, t in enumerate(y):
+                            if t.item() not in self.residual_dict.keys():
+                                self.residual_dict[t.item()] = [residual[idx]]
+                                self.feature_dict[t.item()] = [feature.detach()[idx]]
+                                self.residual_dict_index[t.item()] = [sample_nums[idx].item()]
+                            else: 
+                                if sample_nums[idx].item() in self.residual_dict_index[t.item()]:
+                                    target_index = self.residual_dict_index[t.item()].index(sample_nums[idx].item())
+                                    del self.residual_dict[t.item()][target_index]
+                                    del self.feature_dict[t.item()][target_index]
+                                    del self.residual_dict_index[t.item()][target_index]
+                                    
+                                self.residual_dict[t.item()].append(residual[idx])
+                                self.feature_dict[t.item()].append(feature.detach()[idx])
+                                self.residual_dict_index[t.item()].append(sample_nums[idx].item())
+                                
+                            if len(self.residual_dict[t.item()]) > self.residual_num:
+                                self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
+                                self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
+                                self.residual_dict_index[t.item()] = self.residual_dict_index[t.item()][1:]
+                    else:
+                        for idx, t in enumerate(y):
+                            if t.item() not in self.residual_dict.keys():
+                                self.residual_dict[t.item()] = [residual[idx]]
+                                self.feature_dict[t.item()] = [feature.detach()[idx]]
+                            else:  
+                                self.residual_dict[t.item()].append(residual[idx])
+                                self.feature_dict[t.item()].append(feature.detach()[idx])
+                                
+                            if len(self.residual_dict[t.item()]) > self.residual_num:
+                                self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
+                                self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
+
+            # accuracy calculation
+            with torch.no_grad():
+                cls_score = feature.detach() @ self.etf_vec
+                if self.use_synthetic_regularization:
+                    acc, correct = self.compute_accuracy(cls_score, y, real_entered_num_class = len(self.memory.cls_list), real_num_class = self.real_num_classes)
+                else:    
+                    acc, correct = self.compute_accuracy(cls_score[:, :len(self.memory.cls_list)], y)
+                
+                acc = acc.item()
+        
+        return loss, feature, correct
+    '''
+    
+    def model_forward(self, x, y, sample_nums, augmented_input=False):
+        
         with torch.cuda.amp.autocast(self.use_amp):
             target = self.etf_vec[:, y].t()
             feature, proj_output = self.model(x)
+            feature = self.pre_logits(feature)
 
             if self.loss_criterion == "DR":
                 loss = self.criterion(feature, target)
@@ -232,16 +363,6 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
             # compute key features
             with torch.no_grad():  # no gradient to keys
                 self._momentum_update_key_encoder()  # update the key encoder
-                '''
-                # shuffle for making use of BN
-                im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
-
-                _, _, k = self.ema_model(im_k, get_feature=True)  # keys: NxC
-                k = nn.functional.normalize(k, dim=1)
-
-                # undo shuffle
-                k = self._batch_unshuffle_ddp(k, idx_unshuffle)
-                '''
                     
                 _, k = self.ema_model(x)
 
@@ -264,16 +385,19 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
             logits /= self.moco_T 
 
             # labels: positive key indicators
-            labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
+            labels = torch.zeros(logits.shape[0], dtype=torch.long).to(self.device)
 
             # dequeue and enqueue
             self.model._dequeue_and_enqueue(k)
             
             selfsup_loss = self.moco_criterion(logits, labels)
             
+            
             # TODO loss balancing
-            loss += (self.moco_coeff * selfsup_loss)
-                            
+            # print("loss", loss, "selfsup_loss", selfsup_loss)
+            # loss += (self.moco_coeff * selfsup_loss)
+    
+                         
             if self.use_feature_distillation:
                 # calcualte current feature
                 for idx, y_i in enumerate(y):
@@ -370,17 +494,6 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                                 self.residual_dict[t.item()] = self.residual_dict[t.item()][1:]
                                 self.feature_dict[t.item()] = self.feature_dict[t.item()][1:]
                 
-                '''
-                if self.use_synthetic_regularization:
-                    #ood_dict, reg_loss = self.ood_inference()
-                    print("loss", loss, "reg_loss", reg_loss)
-                    if reg_loss is not None:
-                        loss += reg_loss
-                    if self.store_pickle and self.rnd_seed == 1 and self.sample_num % 100 == 0 and self.sample_num !=0 and self.ood_strategy!="none":
-                        ood_dict, _ = self.ood_inference(16)
-                        self.ood_store(ood_dict)
-                ''' 
-
             # accuracy calculation
             with torch.no_grad():
                 cls_score = feature.detach() @ self.etf_vec
@@ -392,7 +505,8 @@ class ETF_ER_RESMEM_VER6(CLManagerBase):
                 acc = acc.item()
         
         return loss, feature, correct
-
+    
+    
     def pre_logits(self, x):
         x = x / torch.norm(x, p=2, dim=1, keepdim=True)
         return x

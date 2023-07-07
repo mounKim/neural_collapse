@@ -866,9 +866,9 @@ class ETF_ER_RESMEM_VER7(CLManagerBase):
                 x = x.to(self.device)
                 y = y.to(self.device)
 
-                _, features = self.model(x, get_feature=True)
+                features, proj_output = self.model(x)
                 features = self.pre_logits(features)
-
+                
                 if self.use_residual:
 
                     # |z-z(i)|**2

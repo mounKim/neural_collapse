@@ -730,18 +730,17 @@ class ETF_ER_RESMEM_VER5(CLManagerBase):
                             feature_dict[u_y].append(torch.index_select(features, 0, indices))
                     '''
 
+
                 if self.use_residual:
                     if self.use_residual_unique:
                         total_mask = torch.Tensor([len(self.residual_dict_index[key]) for key in list(self.residual_dict_index.keys())]).to(self.device) >= self.residual_num_threshold
                     else:
                         total_mask = torch.Tensor([len(self.residual_dict[key]) for key in list(self.residual_dict.keys())]).to(self.device) >= self.residual_num_threshold
                         
-                    if self.residual_strategy == "prob":
+                    if self.residual_strategy == "within" or self.residual_strategy == "nc1":
                         prob_mask = prob > torch.rand(1).to(self.device)
-                        
                         if self.use_residual_warmup:
                             prob_mask *= total_mask
-
                         mask = torch.zeros(len(y)).to(self.device)
                         for idx, y_i in enumerate(y):
                             if y_i >= len(prob_mask):

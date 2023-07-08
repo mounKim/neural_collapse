@@ -474,8 +474,8 @@ class CLManagerBase:
                 batch_size=batch_size,
                 num_workers=n_worker,
             )
-            
-            if len(cls_order) - len(self.exposed_classes) == self.num_future_class:
+            '''
+            if len(cls_order) - len(self.exposed_classes) <= self.num_future_class:
                 self.future_train_loader = None
                 self.future_test_loader = None
             else:
@@ -516,7 +516,7 @@ class CLManagerBase:
                     batch_size=batch_size,
                     num_workers=n_worker,
                 )
-            
+            '''
         eval_dict = self.evaluation(self.test_loader, self.criterion)
         self.report_test(sample_num, eval_dict["avg_loss"], eval_dict["avg_acc"], eval_dict["cls_acc"])
         #future_eval_dict = self.future_evaluation()

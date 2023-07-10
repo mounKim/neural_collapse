@@ -20,6 +20,7 @@ from methods.etf_er_resmem_ver3 import ETF_ER_RESMEM_VER3
 from methods.etf_er_resmem_ver4 import ETF_ER_RESMEM_VER4
 from methods.etf_er_resmem_ver5 import ETF_ER_RESMEM_VER5
 from methods.etf_er_resmem_ver6 import ETF_ER_RESMEM_VER6
+from methods.etf_er_resmem_ver7 import ETF_ER_RESMEM_VER7
 from methods.etf_er_initial import ETF_ER_INITIAL
 from methods.etf_er_resmem import ETF_ER_RESMEM
 from methods.baseline_new_joint import BASELINE_JOINT
@@ -115,6 +116,13 @@ def select_method(args, train_datalist, test_datalist, device):
         )
     elif args.mode == "etf_er_resmem_ver6":
         method = ETF_ER_RESMEM_VER6(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "etf_er_resmem_ver7":
+        method = ETF_ER_RESMEM_VER7(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,

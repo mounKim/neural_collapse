@@ -1705,7 +1705,8 @@ class DistillationMemory(MemoryDataset):
 def get_train_datalist(dataset, sigma, repeat, init_cls, rnd_seed):
     with open(f"collections/{dataset}/{dataset}_sigma{sigma}_repeat{repeat}_init{init_cls}_seed{rnd_seed}.json") as fp:
         train_list = json.load(fp)
-    return train_list['stream'], train_list['cls_dict'], train_list['cls_addition']
+    print("train_list", train_list.keys())
+    return train_list['stream'], train_list['cls_dict'], train_list['cls_addition'], train_list['cls_order'], train_list["future_train_dict_k5"], train_list["future_train_dict_k10"], train_list["future_train_dict_k20"], train_list["future_train_dict_k100"]
 
 def get_test_datalist(dataset) -> List:
     try:

@@ -1,15 +1,15 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="etf_er_resmem_ver3_cifar10_sigma10_iter1_use_residual_wo_knn_temp_0.9_k21"
+NOTE="scr_sigma0_iter1"
 #"etf_er_resmem_ver7_moco_cifar10_sigma10_iter1_moco_coeff_0.01"
 #"etf_er_resmem_ver3_sigma10_cifar10_non_distill_non_residual_w_neck"
 #"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k3_residual_num20" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
-MODE="etf_er_resmem_ver3"
+MODE="scr"
 K_COEFF="4"
 TEMPERATURE="0.125"
-TRANSFORM_ON_GPU="--transform_on_gpu"
-#TRANSFORM_ON_GPU=""
+#TRANSFORM_ON_GPU="--transform_on_gpu"
+TRANSFORM_ON_GPU=""
 N_WORKER=1
 FUTURE_STEPS=1
 EVAL_N_WORKER=2
@@ -28,7 +28,7 @@ RESIDUAL_NUM_THRESHOLD=10
 CURRENT_FEATURE_NUM=50
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 ONLINE_ITER=1
-SIGMA=10
+SIGMA=0
 REPEAT=1
 INIT_CLS=100
 USE_AMP="--use_amp"

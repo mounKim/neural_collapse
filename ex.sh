@@ -2,10 +2,11 @@
 
 # CIL CONFIG
 NOTE="scr_sigma0_iter1"
-#"etf_er_resmem_ver7_moco_cifar10_sigma10_iter1_moco_coeff_0.01"
-#"etf_er_resmem_ver3_sigma10_cifar10_non_distill_non_residual_w_neck"
-#"etf_er_resmem_not_pre_trained_sigma0_cifar10_iter_1_loss_dr_temp1_knn_sigma0.7_softmax_top_k3_residual_num20" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="scr"
+SEEDS="1"
+ONLINE_ITER=1
+SIGMA=0
+
 K_COEFF="4"
 TEMPERATURE="0.125"
 #TRANSFORM_ON_GPU="--transform_on_gpu"
@@ -17,7 +18,7 @@ EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
 USE_KORNIA=""
 UNFREEZE_RATE=0.25
-SEEDS="1"
+
 KNN_TOP_K="21"
 SELECT_CRITERION="softmax"
 LOSS_CRITERION="DR"
@@ -27,8 +28,6 @@ RESIDUAL_NUM=50
 RESIDUAL_NUM_THRESHOLD=10
 CURRENT_FEATURE_NUM=50
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
-ONLINE_ITER=1
-SIGMA=0
 REPEAT=1
 INIT_CLS=100
 USE_AMP="--use_amp"
@@ -115,7 +114,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=0 python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE $USE_NECK_FORWARD --moco_coeff $MOCO_COEFF \
+    CUDA_VISIBLE_DEVICES=6 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE $USE_NECK_FORWARD --moco_coeff $MOCO_COEFF \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE --ood_strategy $OOD_STRATEGY --scl_coeff $SCL_COEFF --future_training_iterations $FUTURE_TRAINING_ITERATIONS \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 --residual_num $RESIDUAL_NUM $RESIDUAL_WARM_UP $MODIFIED_KNN --ood_num_samples $OOD_NUM_SAMPLES \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS --residual_num_threshold $RESIDUAL_NUM_THRESHOLD --num_k_shot $NUM_K_SHOT \

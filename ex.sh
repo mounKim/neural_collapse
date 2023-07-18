@@ -3,9 +3,10 @@
 # CIL CONFIG
 NOTE="scr_sigma0_iter1"
 MODE="scr"
-SEEDS="1"
+SEEDS="3"
 ONLINE_ITER=1
-SIGMA=0
+SIGMA=10
+DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 
 K_COEFF="4"
 TEMPERATURE="0.125"
@@ -27,7 +28,6 @@ KNN_SIGMA=0.9
 RESIDUAL_NUM=50
 RESIDUAL_NUM_THRESHOLD=10
 CURRENT_FEATURE_NUM=50
-DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 REPEAT=1
 INIT_CLS=100
 USE_AMP="--use_amp"

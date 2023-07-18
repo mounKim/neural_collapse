@@ -3,7 +3,7 @@
 # CIL CONFIG
 NOTE="scr_sigma0_iter1"
 MODE="scr"
-SEEDS="1 2 3"
+SEEDS="2"
 ONLINE_ITER=3
 SIGMA=0
 DATASET="cifar100" # cifar10, cifar100, tinyimagenet, imagenet

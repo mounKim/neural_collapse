@@ -114,7 +114,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=6 nohup python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE $USE_NECK_FORWARD --moco_coeff $MOCO_COEFF \
+    CUDA_VISIBLE_DEVICES=6 python main_new.py --mode $MODE --residual_strategy $RESIDUAL_STRATEGY $RESIDUAL_UNIQUE $USE_NECK_FORWARD --moco_coeff $MOCO_COEFF \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE --ood_strategy $OOD_STRATEGY --scl_coeff $SCL_COEFF --future_training_iterations $FUTURE_TRAINING_ITERATIONS \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 --residual_num $RESIDUAL_NUM $RESIDUAL_WARM_UP $MODIFIED_KNN --ood_num_samples $OOD_NUM_SAMPLES \
     --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --num_eval_class $NUM_EVAL_CLASS --num_class $NUM_CLASS --residual_num_threshold $RESIDUAL_NUM_THRESHOLD --num_k_shot $NUM_K_SHOT \

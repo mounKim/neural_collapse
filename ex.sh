@@ -4,8 +4,8 @@
 NOTE="scr_sigma0_iter1"
 MODE="scr"
 SEEDS="3"
-ONLINE_ITER=4
-SIGMA=0
+ONLINE_ITER=1
+SIGMA=10
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 
 K_COEFF="4"

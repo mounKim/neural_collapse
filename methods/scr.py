@@ -124,7 +124,8 @@ class SCR(ER):
                 feature.data = feature.data / feature.data.norm()  # Normalize
                 features.append(feature)
             if len(features) == 0:
-                pass
+                mu_y = torch.normal(0, 1, size=(512,))
+                mu_y = mu_y.squeeze().to(self.device)
             else:
                 features = torch.stack(features)
                 mu_y = features.mean(0).squeeze()

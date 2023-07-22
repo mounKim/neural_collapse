@@ -86,10 +86,13 @@ class SCR(ER):
 
             if self.use_amp:
                 self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                nn.utils.clip_grad_norm_(self.model.parameters(), 5)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
                 loss.backward()
+                nn.utils.clip_grad_norm_(self.model.parameters(), 5)
                 self.optimizer.step()
 
             #self.total_flops += (len(y) * self.backward_flops)
